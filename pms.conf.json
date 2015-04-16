@@ -1,0 +1,17 @@
+{
+ "LISTEN":"0.0.0.0:2525",
+ "MAX_SMTP_CLIENTS":"10000",
+ "MAILDIR":"/var/pms/mail/domains/",
+ "RCPT_HOSTS":"nurmol.com",
+ "HOSTNAME":"mail.nurmol.com",
+ "SMTP_RELAY":"127.0.0.1:12025",
+ "DB_USER":"root",
+ "DB_PASS":"toor",
+ "DB_NAME":"pms",
+ "DB_HOST":"127.0.0.1:3306",
+ "AUTH_METHOD":"PLAIN",
+ "CHECK_SPAMC":"0",
+ "DEBUG":"1",
+ "SGID":"508",
+ "GUID":"504"
+}
