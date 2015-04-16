@@ -13,5 +13,6 @@
  "CHECK_SPAMC":"0",
  "DEBUG":"1",
  "SGID":"508",
- "GUID":"504"
+ "GUID":"504",
+ "TLS":"1"
 }

@@ -1,22 +1,8 @@
-/*** 
-  PMS - Harun Delgado
-
-  PMS is a simple email server based on go-guerrilla and the great Perl qpsmtpd
-
-  For send emails use a relay server for example a postfix at 127.0.0.1:12025 , no auth methods implemented
-
-  Accept all emails of hosts valid in  "rcpt_to hosts" or is authenticated user to relay mail
-
-  The structure of the users is so simple if the directory exists, is a welcome user.
-
-  You can make symbolic links between directories to make a alias email.
-
-  Config file : pms.conf.json
+/*** PMS
 
   - SpamAssasin : github.com/saintienn/go-spamc
   - Redis / MySQL
   - Listen on two interfaces
-  - Auth : PLAIN && CRAM-MD5
   - Header : Array para headers : add / del / edit
    -- Checking a : MAIL FROM && RCPT TO
   - handleSignals : ./server/camlistored/camlistored.go
@@ -27,7 +13,8 @@
   - Plugins
 
 V 001
- 
+
+ + Auth : PLAIN && CRAM-MD5 
  + No respeta formato \r\n al agregar las cabeceras del SPAM
  * Filters migrado qpsmtpd
  - Estructura basica para el Maildir : https://github.com/luksen/maildir/blob/master/maildir.go
@@ -42,6 +29,7 @@ import (
 	"bufio"
         "crypto/md5"
 	"crypto/hmac"
+	"crypto/tls"
 	"database/sql"
 	"encoding/base64"
         "encoding/hex"
@@ -113,7 +101,9 @@ var Config = map[string]string {
 var cDaemon = map[string]int {
 	"MAX_SIZE" : 131072,
 	"TIMEOUT"  : 60,
+	"STARTTLS" : 0,
 }
+
 const (
 	RECV_BUF_LEN = 1024
 	MAIL_CMD     = 1
@@ -153,6 +143,17 @@ func main() {
                 Config[k] = v
         }
 
+	// Enabled TLS
+	if Config["TLS"] == "1" {
+		cDaemon["STARTTLS"] = 1
+		cert, err := tls.LoadX509KeyPair("./pms-cert.pem", "./pms-cert.key")
+		if err != nil {
+			log.Fatalln("Error tls.LoadX509KeyPair")
+		}
+		configTLS := tls.Config{Certificates: []tls.Certificate{cert}}
+		fmt.Println(configTLS)
+	}
+	
         // Domains valid RCPT                                                                                                                                               
         if arr := strings.Split(Config["RCPT_HOSTS"], ","); len(arr) > 0 {
                 for i := 0; i < len(arr); i++ {
@@ -187,7 +188,7 @@ func main() {
 	for i := 0; i < 5; i++ {
                 go WriteData()
         }
-
+	
 	srv, err := net.Listen("tcp",Config["LISTEN"])
 
 	if err != nil {
@@ -226,6 +227,7 @@ func Parser(cl *Client) {
 	var counter_cmd int
 
 	cl.res = "220 " + Config["HOSTNAME"] + " localhost ESMTP " + strconv.FormatInt(cl.clientID, 9) + " " + Config["VERSION"] + "\r\n"
+
 	cl.state = 1
 	cl.conn.Write([]byte(string(cl.res)))
 
@@ -481,9 +483,15 @@ func closeClient(cl *Client) {
 func greeting(cl *Client) {
 	cl.res =
 		"250-" + Config["HOSTNAME"] + " Uluba-babula, [" + string(cl.addr) + "]" + "\r\n" +
-		"250-PIPELINING" + "\r\n" +
-		"250-8BITMIME" + "\r\n" +
-		"250 AUTH PLAIN CRAM-MD5"
+		"250-SIZE " + strconv.Itoa(max_size) + "\r\n" +
+		"250-PIPELINING\r\n" +
+		"250-8BITMIME\r\n"
+
+	if cDaemon["STARTTLS"] == 1 {
+                cl.res = cl.res + "250-STARTTLS\r\n"
+        }
+
+	cl.res = cl.res + "250 AUTH PLAIN CRAM-MD5"
 }
 
 func rcpt_to(cl *Client) {
