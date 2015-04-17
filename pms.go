@@ -30,6 +30,7 @@ import (
         "crypto/md5"
 	"crypto/hmac"
 	"crypto/tls"
+	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
         "encoding/hex"
@@ -83,7 +84,10 @@ type Client struct {
         errors      int
         clientID    int64
         savedNotify chan int
+	tls_on      bool
 }
+
+var TLSconfig *tls.Config
 
 var db *sql.DB                    // Global mysql DB
 var max_size int                  // max email DATA size
@@ -111,6 +115,7 @@ const (
 	MAIL_RELAY   = 3
 	MAIL_QUEUE   = 4
 	MAIL_EXIT    = 5
+	MAIL_TLS     = 6
 	MAIL_SPAM    = 8
 	DENY_RELAY   = 550
 	DENY_USER    = 551
@@ -121,7 +126,7 @@ const (
 )
 
 func main() {
-	println("Starting " + Config["VERSION"] + " - ", runtime.NumCPU())
+        log.Printf("%s - Go %s (%s/%s) - CPUs %d",Config["VERSION"],runtime.Version(),runtime.GOOS,runtime.GOARCH,runtime.NumCPU())
 
 	// Read config from env 
 	if os.Getenv("PMS_CONFIG") != "" {
@@ -150,8 +155,9 @@ func main() {
 		if err != nil {
 			log.Fatalln("Error tls.LoadX509KeyPair")
 		}
-		configTLS := tls.Config{Certificates: []tls.Certificate{cert}}
-		fmt.Println(configTLS)
+		//configTLS := tls.Config{Certificates: []tls.Certificate{cert}}
+		TLSconfig = &tls.Config{Certificates: []tls.Certificate{cert}, ClientAuth: tls.VerifyClientCertIfGiven, ServerName: Config["HOSTNAME"] }
+		TLSconfig.Rand = rand.Reader
 	}
 	
         // Domains valid RCPT                                                                                                                                               
@@ -204,7 +210,8 @@ func main() {
 			print("Error client :", err.Error())
 			continue
 		}
-                //fmt.Println(1, fmt.Sprintf(" There are now "+strconv.Itoa(runtime.NumGoroutine())+" serving goroutines"))
+
+                log.Print("Goroutines: "+strconv.Itoa(runtime.NumGoroutine()))
 
                 sem <- 1
 		go Parser(&Client{
@@ -267,6 +274,9 @@ func Parser(cl *Client) {
                                 }
 				cl.res = "354 go ahead"
 				cl.state = MAIL_QUEUE
+			case strings.Index(cmd, "STARTTLS") == 0:
+                                cl.res = "220 2.0.0 Go TLS"
+                                cl.state = MAIL_TLS
 			case strings.Index(cmd, "AUTH") == 0:
 				auth_method := input[5:]
 				switch { 
@@ -356,6 +366,19 @@ func Parser(cl *Client) {
 		case 5:
 			killClient(cl)
 		case 6:
+			var tlsConn *tls.Conn
+			tlsConn = tls.Server(cl.conn, TLSconfig)
+			err := tlsConn.Handshake() // not necessary to call here, but might as well
+			if err == nil {
+				cl.conn = net.Conn(tlsConn)
+				cl.bufin = bufio.NewReader(cl.conn)
+				cl.bufout = bufio.NewWriter(cl.conn)
+				cl.tls_on = true
+			} else {
+				log.Print(fmt.Sprintf("Could not TLS handshake:%v", err))
+			}
+			cDaemon["STARTTLS"] = 0
+			cl.state = 1
 		case 8:
 		case 550:
 			cl.res = "550 5.7.1 Relaying denied"
@@ -370,7 +393,8 @@ func Parser(cl *Client) {
 
 		cl.res = cl.res + "\r\n"
 		cl.conn.Write([]byte(string(cl.res)))
-		
+		cl.res = ""
+
 		if cl.kill_time > 1 {
 			return
 		}
