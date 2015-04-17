@@ -6,3 +6,4 @@ pms
 PMS
 pms-cert.key
 pms-cert.pem
+.gitignore
