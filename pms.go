@@ -7,7 +7,6 @@
    -- Checking a : MAIL FROM && RCPT TO
   - handleSignals : ./server/camlistored/camlistored.go
   - DKIM
-  - TLS
   - LOG : Auth brute force
   - RCPT_TO : Desde Config o DB
   - Plugins
@@ -153,13 +152,12 @@ func main() {
 		cDaemon["STARTTLS"] = 1
 		cert, err := tls.LoadX509KeyPair("./pms-cert.pem", "./pms-cert.key")
 		if err != nil {
-			log.Fatalln("Error tls.LoadX509KeyPair")
+			log.Fatalln("Error: tls.LoadX509KeyPair")
 		}
-		//configTLS := tls.Config{Certificates: []tls.Certificate{cert}}
 		TLSconfig = &tls.Config{Certificates: []tls.Certificate{cert}, ClientAuth: tls.VerifyClientCertIfGiven, ServerName: Config["HOSTNAME"] }
 		TLSconfig.Rand = rand.Reader
 	}
-	
+
         // Domains valid RCPT                                                                                                                                               
         if arr := strings.Split(Config["RCPT_HOSTS"], ","); len(arr) > 0 {
                 for i := 0; i < len(arr); i++ {
@@ -171,8 +169,7 @@ func main() {
 	max_size = cDaemon["MAX_SIZE"]
 
 	// init MySQL
-	db, err = sql.Open("mysql", Config["DB_USER"]+":"+Config["DB_PASS"]+"@unix(/var/run/mysqld/mysqld.sock)/pms") // this does not really open a new connection
-        //db, err = sql.Open("mysql",Config["DB_USER"]+":"+Config["DB_PASS"]+"@tcp("+Config["DB_HOST"]+")/"+Config["DB_NAME"])
+	db, err = sql.Open("mysql", Config["DB_USER"]+":"+Config["DB_PASS"]+Config["DB_HOST"]+"/"+Config["DB_NAME"])
         defer db.Close()
 	
         if err != nil {
@@ -377,7 +374,6 @@ func Parser(cl *Client) {
 			} else {
 				log.Print(fmt.Sprintf("Could not TLS handshake:%v", err))
 			}
-			cDaemon["STARTTLS"] = 0
 			cl.state = 1
 		case 8:
 		case 550:
@@ -511,7 +507,7 @@ func greeting(cl *Client) {
 		"250-PIPELINING\r\n" +
 		"250-8BITMIME\r\n"
 
-	if cDaemon["STARTTLS"] == 1 {
+	if ! cl.tls_on {
                 cl.res = cl.res + "250-STARTTLS\r\n"
         }
 
