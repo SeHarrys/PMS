@@ -230,12 +230,12 @@ func Parser(cl *Client) {
 
 	var counter_cmd int
 
-	cl.res = "220 " + Config["HOSTNAME"] + " localhost ESMTP " + strconv.FormatInt(cl.clientID, 9) + " " + Config["VERSION"] + "\r\n"
+	cl.res = "220 " + Config["HOSTNAME"] + " ESMTP " + strconv.FormatInt(cl.clientID, 9) + " " + Config["VERSION"] + "\r\n"
 
 	cl.state = 1
 	cl.conn.Write([]byte(string(cl.res)))
 
-	for i := 0; i < 16; i++ {
+	for i := 0; i < 64; i++ {
 		if counter_cmd >= 3 {
 			cl.res = "521 Closing connection. 4 unrecognized commands"
 			killClient(cl)
@@ -387,9 +387,11 @@ func Parser(cl *Client) {
 			killClient(cl)
 		}
 
-		cl.res = cl.res + "\r\n"
-		cl.conn.Write([]byte(string(cl.res)))
-		cl.res = ""
+		if cl.res != "" {
+			cl.res = cl.res + "\r\n"
+			cl.conn.Write([]byte(string(cl.res)))
+			cl.res = ""
+		}
 
 		if cl.kill_time > 1 {
 			return
@@ -443,7 +445,7 @@ func readData(client *Client) (input string, err error) {
 		spam(client)
 	}
 	
-	// FIXME => net/mail : Peta cuando el MailAddress devuelve error de tal modo que se ha de convertir la estructura de otro modo....
+	// FIXME => net/mail : Peta cuando el MailAddress devuelve error
         my_msg, err := mail.ReadMessage(bytes.NewBuffer([]byte(client.data)))
 
         if err != nil {
@@ -452,13 +454,12 @@ func readData(client *Client) (input string, err error) {
 	
 	for i,k := range my_msg.Header {
 		client.headers[i] = strings.Join(k, " ")
-		//fmt.Println(strings.Join(k, ", ")) //," : ",k)
 	}
 
         body, err := ioutil.ReadAll(my_msg.Body)
         if err != nil {
                 //fmt.Println("test #%d: Failed reading body: %v", i, err)
-                log.Fatal("Body errror")
+                log.Fatal("Body error")
 	}
 
 	client.mail_con = string(body)
@@ -487,7 +488,6 @@ func readSmtp(client *Client) (input string, err error) {
 
 	input = strings.Trim(input, " \n\r")
 
-        //fmt.Println("From : ",client.addr ,"recv bytes of data =", input)
         return input, err
 }
 
@@ -531,8 +531,9 @@ func rcpt_to(cl *Client) {
         if ! allowedHosts[cl.domain] && cl.auth == false {
                 cl.state  = DENY_RELAY
                 cl.status = 0
+		return
         } else if ! allowedHosts[cl.domain] {
-                cl.status = 2
+                cl.state = MAIL_RELAY
                 return
         }
 
@@ -553,13 +554,13 @@ func rcpt_to(cl *Client) {
 func spam(cl *Client) {
 	spam := spamc.New("127.0.0.1:783",10)
 	
-	reply, _ := spam.Process(cl.data) //, "saintienn")                                                                                                       
+	reply, _ := spam.Process(cl.data)
 
 	// Si es SPAM pasa 14 lo elimina                                                                                                                   
 	// Si pasa de 8 el Subject                                                                                                                       
 	if reply.Vars["isSpam"] == true {
-		//spam.Report()
-		//cl.state = DENY_SPAM
+		spam.Report()
+		cl.state = DENY_SPAM
 		cl.subject = "*** SPAM-MAIL *** " + cl.subject
 	}
 	
@@ -580,7 +581,6 @@ func WriteData() {
 		cl.subject = mimeHeaderDecode(cl.subject)
 		cl.hash = md5hex(cl.mail_from + cl.subject + strconv.FormatInt(time.Now().UnixNano(), 10))
 
-		//return Qpsmtpd::DSN->relaying_denied() if $headers->get('To') eq $transaction->sender->address && ! $self->auth_user();
 		if cl.user == cl.mail_from && ! cl.auth { cl.savedNotify <- -1 }
 
 		add_head := ""
@@ -723,11 +723,11 @@ func AuthMD5(cl *Client) {
         switch {
 	case sqlerr == sql.ErrNoRows:
                 cl.res = "535 PLAIN Authentication failed for:"+arr[1]
-                cl.status = MAIL_EXIT
+                cl.state = MAIL_EXIT
 		return
 	case sqlerr != nil:
                 cl.res = "535 PLAIN Authentication failed"
-                cl.status = MAIL_EXIT
+                cl.state = MAIL_EXIT
 		return
         }
 
@@ -752,7 +752,8 @@ func Relay(cl *Client) {
 	
         if err != nil {
                 log.Println(err)
-		cl.res = "421 SMTP RELAY error"
+		cl.res = "421 SMTP RELAY Error connect: "+Config["SMTP_RELAY"]
+		cl.state = MAIL_EXIT
 		return 
         }
 
