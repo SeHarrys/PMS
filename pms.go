@@ -13,7 +13,6 @@
 
 V 001
 
- + Auth : PLAIN && CRAM-MD5 
  + No respeta formato \r\n al agregar las cabeceras del SPAM
  * Filters migrado qpsmtpd
  - Estructura basica para el Maildir : https://github.com/luksen/maildir/blob/master/maildir.go
@@ -158,13 +157,6 @@ func main() {
 		TLSconfig.Rand = rand.Reader
 	}
 
-        // Domains valid RCPT                                                                                                                                               
-        if arr := strings.Split(Config["RCPT_HOSTS"], ","); len(arr) > 0 {
-                for i := 0; i < len(arr); i++ {
-                        allowedHosts[arr[i]] = true
-                }
-        }
-
 	timeout = time.Duration(cDaemon["TIMEOUT"])
 	max_size = cDaemon["MAX_SIZE"]
 
@@ -184,9 +176,33 @@ func main() {
 		log.Fatalf("Error on opening database connection: %s", err.Error())
 	}
 
+	// Domains valid RCPT
+	rows, err := db.Query("SELECT dominio FROM domains WHERE estado = 1")
+
+	if err != nil { log.Fatalln(err) }
+
+	for rows.Next() {
+		var domain string
+
+		if err := rows.Scan(&domain); err != nil {
+			log.Fatal(err)
+		}
+		allowedHosts[domain] = true
+	}
+
+	if err := rows.Err(); err != nil {
+		log.Fatalln(err)
+	}
+	
+	//if arr := strings.Split(Config["RCPT_HOSTS"], ","); len(arr) > 0 {
+	//	for i := 0; i < len(arr); i++ {
+	//		allowedHosts[arr[i]] = true
+	//	}
+	//}
+	
 	// Channels
-        sem = make(chan int, 50)
-        WriteMailChan = make(chan *Client, 5)
+        sem = make(chan int, 120)
+        WriteMailChan = make(chan *Client, 120)
 	
 	for i := 0; i < 5; i++ {
                 go WriteData()
@@ -351,13 +367,17 @@ func Parser(cl *Client) {
 				
 				if status == 1 {
 					cl.res = "250 2.0.0 OK " + cl.hash + " " + strconv.FormatInt(cl.clientID, 9)
+					cl.state = MAIL_CMD
+				} else if status == 500 {
+					cl.res = "554 Error: queue"
+					cl.state = MAIL_EXIT
 				} else {
 					cl.res = "554 Error: transaction failed"
+					cl.state = MAIL_EXIT
 				}
-				cl.state = 1
 			} else if cl.status == 2 {
 				Relay(cl)
-				cl.state = 1
+				cl.state = MAIL_CMD
 			}
 
 		case 5:
@@ -520,6 +540,12 @@ func rcpt_to(cl *Client) {
         cl.rcpt_to = strings.Replace(cl.rcpt_to, ">", "", -1)
 
         s := strings.Split(cl.rcpt_to, "@")
+
+	if len(s) < 2 {
+		cl.state = DENY_USER
+		return
+	}
+	
         email, domain := s[0], s[1]
 
 	cl.domain = strings.ToLower(domain)
@@ -527,16 +553,18 @@ func rcpt_to(cl *Client) {
 
         cl.domain = strings.Replace(cl.domain, "\n", "", -1)
 
-	// Domains valid RCPT
+	// Checks Domains valid RCPT && User
         if ! allowedHosts[cl.domain] && cl.auth == false {
                 cl.state  = DENY_RELAY
-                cl.status = 0
 		return
         } else if ! allowedHosts[cl.domain] {
                 cl.state = MAIL_RELAY
                 return
-        }
-
+        } else 	if ! validUser(cl.user) {
+		cl.state = DENY_USER
+		return
+	}
+	
 	rcpt_path := Config["MAILDIR"]+cl.domain+"/"+cl.user
 
         _, err := os.Open(rcpt_path)
@@ -607,40 +635,63 @@ func WriteData() {
 		pms_domain := parts[leng - 2]
 
 		// Filters EMail
-		var control int
-		_ = db.QueryRow("SELECT id FROM control WHERE pw_name = ? AND pw_domain = ?",pms_user,pms_domain).Scan(&control)
+		var dir_out string = filterDb(cl,pms_user,pms_domain)
 
-		rows, err := db.Query("SELECT f.method,f.method_arg,f.value,f.out FROM filters f WHERE f.control = ?",control)
+		var my_file string = Config["MAILDIR"] + cl.domain + "/" + cl.user + "/Maildir/" + dir_out + "new/" +
+			strconv.FormatInt(cl.clientID, 9) + "_" + cl.hash + ":2,"
 
-		if err != nil { log.Fatal(err) }
-		
-		for rows.Next() {
-			var method, method_arg, out, value string
-			
-			if err := rows.Scan(&method,&method_arg,&out,&value); err != nil {
-				log.Fatal(err)
-			}
-			fmt.Printf("%s %s %s %s\n",method,method_arg,out,value)
-		}
-
-		if err := rows.Err(); err != nil {
-			log.Fatal(err)
-		}
-
-		var my_file string = Config["MAILDIR"] + cl.domain + "/" + cl.user + "/Maildir/new/" + strconv.FormatInt(cl.clientID, 9) + "_" + cl.hash + ":2,"
-
-		if Config["DEBUG"] == "1" {
-			log.Print(my_file)
-		}
-
-		file,_ := os.Create(my_file)
-		w := bufio.NewWriter(file)
-		fmt.Fprint(w, cl.data)	
-		w.Flush()
-		file.Close()
+		saveFile(cl,my_file)
 
 		cl.savedNotify <- 1
 	}
+}
+
+func filterDb(cl *Client,pms_user string,pms_domain string) (dir_out string) {
+	
+	rows, err := db.Query("SELECT f.method,f.method_arg,f.value,f.out FROM control c LEFT JOIN filters f ON f.control = c.id WHERE c.pw_name = ? AND c.pw_domain = ?",pms_user,pms_domain)
+
+	if err != nil { log.Fatal(err) }
+
+	for rows.Next() {
+		var method, method_arg, out, value string
+
+		if err := rows.Scan(&method,&method_arg,&value,&out); err != nil {
+			log.Fatal(err)
+		}
+
+		if method == "from" && strings.ToUpper(cl.headers["From"]) == strings.ToUpper(value) {
+			fmt.Printf("%s %s %s %s\n",method,method_arg,value,out)
+			dir_out = out + "/"
+			return
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		log.Fatal(err)
+	}
+	
+	return
+}
+
+// Si no se puede guardar que notifique el problema RFC
+func saveFile(cl *Client,my_file string) {
+	
+	if Config["DEBUG"] == "1" {
+		log.Print(my_file)
+	}
+	
+	file, err := os.Create(my_file)
+
+	if err != nil {
+		log.Println(err)
+		cl.savedNotify <- 500
+		return
+	}
+	
+	w := bufio.NewWriter(file)
+	fmt.Fprint(w, cl.data)
+	w.Flush()
+	file.Close()	
 }
 
 func nullTermToStrings(b []byte) (s []string) {
@@ -816,6 +867,14 @@ func validHost(host string) string {
                 return host
         }
         return ""
+}
+
+func validUser(user string) (bool) {
+        re, _ := regexp.Compile(`^\w+$`)
+	if re.MatchString(user) {
+		return true
+	}
+	return false
 }
 
 func md5hex(str string) string {
