@@ -5,8 +5,8 @@
  "RCPT_HOSTS":"nurmol.com",
  "HOSTNAME":"mail.nurmol.com",
  "SMTP_RELAY":"127.0.0.1:12025",
- "DB_USER":"root",
- "DB_PASS":"toor",
+ "DB_USER":"pms",
+ "DB_PASS":"pms",
  "DB_NAME":"pms",
  "DB_HOST":"@unix(/var/run/mysqld/mysqld.sock)",
  "MDB_HOST":"@tcp(127.0.0.1:3306)",
@@ -15,5 +15,6 @@
  "DEBUG":"1",
  "SGID":"508",
  "GUID":"504",
- "TLS":"1"
+ "TLS":"1",
+ "SYMLINKS":"1"
 }
