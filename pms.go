@@ -88,9 +88,9 @@ type Client struct {
 var TLSconfig *tls.Config
 
 var db *sql.DB                    // Global mysql DB
-var max_size int                  // max email DATA size
 var timeout time.Duration
 var allowedHosts = make(map[string]bool, 16)
+var bannedHosts = make(map[string]int, 16)
 
 var sem chan int                  // currently active clients
 var WriteMailChan chan *Client    // Channel WriteMail
@@ -104,6 +104,8 @@ var cDaemon = map[string]int {
 	"MAX_SIZE" : 131072,
 	"TIMEOUT"  : 60,
 	"STARTTLS" : 0,
+	"BAN_LIMIT": 4,
+	"BAN_TIME" : 3600,
 }
 
 const (
@@ -158,7 +160,6 @@ func main() {
 	}
 
 	timeout = time.Duration(cDaemon["TIMEOUT"])
-	max_size = cDaemon["MAX_SIZE"]
 
 	// init MySQL
 	db, err = sql.Open("mysql", Config["DB_USER"]+":"+Config["DB_PASS"]+Config["DB_HOST"]+"/"+Config["DB_NAME"])
@@ -201,8 +202,8 @@ func main() {
 	//}
 	
 	// Channels
-        sem = make(chan int, 120)
-        WriteMailChan = make(chan *Client, 120)
+        sem = make(chan int, 80)
+        WriteMailChan = make(chan *Client, 80)
 	
 	for i := 0; i < 5; i++ {
                 go WriteData()
@@ -212,19 +213,23 @@ func main() {
 
 	if err != nil {
 		log.Fatalln("Error Listen :", err.Error())
+	} else {
+		log.Printf("Listen: %s",Config["LISTEN"])
 	}
 
+	go Checks()
+	
 	var clientID int64
 	clientID = 1
 
 	for {
 		conn, err := srv.Accept()
 		if err != nil {
-			print("Error client :", err.Error())
+			log.Print("Error client :", err.Error())
 			continue
 		}
-
-                log.Print("Goroutines: "+strconv.Itoa(runtime.NumGoroutine()))
+		
+                //log.Print("Goroutines: "+strconv.Itoa(runtime.NumGoroutine()))
 
                 sem <- 1
 		go Parser(&Client{
@@ -240,7 +245,20 @@ func main() {
                 clientID++
 	}
 }
- 
+
+func Checks() {
+	for {
+		time.Sleep(3600 * time.Second)
+		
+		for k,v := range bannedHosts {
+			if v > cDaemon["BAN_LIMIT"] && int(time.Now().Unix()) > v {
+				log.Printf("Limpiamos: %s - %d",k,v)
+				delete(bannedHosts,k)
+			}
+	}
+}
+}
+
 func Parser(cl *Client) {
         defer closeClient(cl)
 
@@ -252,21 +270,27 @@ func Parser(cl *Client) {
 	cl.conn.Write([]byte(string(cl.res)))
 
 	for i := 0; i < 64; i++ {
-		if counter_cmd >= 3 {
-			cl.res = "521 Closing connection. 4 unrecognized commands"
-			killClient(cl)
+
+		s := strings.Split(cl.addr, ":")
+		if bannedHosts[s[0]] > 3 {
+			killClient(cl,"521 You are banned")
 		}
+		
+		if counter_cmd >= 3 {
+			killClient(cl,"521 Closing connection. 4 unrecognized commands")
+		}
+
 		switch cl.state {
 		case 1:
                         input, err := readSmtp(cl)
                         if err != nil {
-                                println(fmt.Sprintf("Read error: %v", err))
+                                log.Printf("%s Read error: %v",cl.addr, err)
                                 if err == io.EOF {
-                                        // client closed the connection already
-                                        return
+                                        //killClient(cl)
+					return
                                 }
                                 if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
-                                        // too slow, timeout
+					//killClient(cl)
                                         return
                                 }
                                 break
@@ -291,6 +315,7 @@ func Parser(cl *Client) {
                                 cl.res = "220 2.0.0 Go TLS"
                                 cl.state = MAIL_TLS
 			case strings.Index(cmd, "AUTH") == 0:
+				//Auth(cl,auth_method)
 				auth_method := input[5:]
 				switch { 
 				case strings.Index(auth_method,"CRAM-MD5") == 0:
@@ -317,7 +342,11 @@ func Parser(cl *Client) {
 			case strings.Index(cmd, "MAIL FROM:") == 0:
 				if len(cmd) > 10 {
                                         cl.mail_from = cmd[10:]
-					//Addr,_ = mail.ParseAddress(cl.mail_from)
+					_,err := mail.ParseAddress(cl.mail_from)
+					if err != nil {
+						cl.res = "501 could not parse your mail from command"
+						break
+					}
 				}
 				cl.res = "250 2.1.0 OK " +strconv.FormatInt(cl.clientID, 9)
 			case strings.Index(cmd, "RCPT TO:") == 0:
@@ -334,8 +363,7 @@ func Parser(cl *Client) {
 					cl.res = "250 2.1.5 OK " +strconv.FormatInt(cl.clientID, 9)
 				}
 			case strings.Index(cmd, "QUIT") == 0:
-				cl.res = "221 2.0.0 " + strconv.FormatInt(cl.clientID, 9) + " closing connection."
-				killClient(cl)
+				killClient(cl,"221 2.0.0 " + strconv.FormatInt(cl.clientID, 9) + " closing connection.")
 			default:
 				counter_cmd++
 				cl.res = "502 5.5.1 Unrecognized command."
@@ -381,11 +409,11 @@ func Parser(cl *Client) {
 			}
 
 		case 5:
-			killClient(cl)
+			//killClient(cl,"")
 		case 6:
 			var tlsConn *tls.Conn
 			tlsConn = tls.Server(cl.conn, TLSconfig)
-			err := tlsConn.Handshake() // not necessary to call here, but might as well
+			err := tlsConn.Handshake()
 			if err == nil {
 				cl.conn = net.Conn(tlsConn)
 				cl.bufin = bufio.NewReader(cl.conn)
@@ -397,14 +425,11 @@ func Parser(cl *Client) {
 			cl.state = 1
 		case 8:
 		case 550:
-			cl.res = "550 5.7.1 Relaying denied"
-			killClient(cl)
+			killClient(cl,"550 5.7.1 Relaying denied")
 		case 551:
-			cl.res = "550 5.1.1 The user does not exist"
-			killClient(cl)
+			killClient(cl,"550 5.1.1 The user does not exist")
 		case 552:
-			cl.res = "550 You are SPAM to me"
-			killClient(cl)
+			killClient(cl,"550 You are SPAM to me")
 		}
 
 		if cl.res != "" {
@@ -432,8 +457,8 @@ func readData(client *Client) (input string, err error) {
 
                 if reply != "" {
                         input = input + reply
-                        if len(input) > max_size {
-                                err = errors.New("Maximum DATA size exceeded (" + strconv.Itoa(max_size) + ")")
+                        if len(input) > cDaemon["MAX_SIZE"] {
+                                err = errors.New("Maximum DATA size exceeded (" + strconv.Itoa(cDaemon["MAX_SIZE"]) + ")")
                                 return input, err
                         }
                         if client.subject == "" && (len(reply) > 8) {
@@ -470,6 +495,8 @@ func readData(client *Client) (input string, err error) {
 
         if err != nil {
                 log.Fatalln("Failed parsing message: %v", err)
+		killClient(client,"500 Failed parsing messag")
+		return
 	}
 	
 	for i,k := range my_msg.Header {
@@ -496,8 +523,8 @@ func readSmtp(client *Client) (input string, err error) {
                 reply, err = client.bufin.ReadString('\n')
                 if reply != "" {
                         input = input + reply
-                        if len(input) > max_size {
-                                err = errors.New("Maximum DATA size exceeded (" + strconv.Itoa(max_size) + ")")
+                        if len(input) > cDaemon["MAX_SIZE"] {
+                                err = errors.New("Maximum DATA size exceeded (" + strconv.Itoa(cDaemon["MAX_SIZE"]) + ")")
                                 return input, err
                         }
 		}
@@ -511,8 +538,10 @@ func readSmtp(client *Client) (input string, err error) {
         return input, err
 }
 
-func killClient(cl *Client) {
+func killClient(cl *Client,msg string) {
         cl.kill_time = time.Now().Unix()
+	cl.state = MAIL_EXIT
+	cl.res = msg
 }
 
 func closeClient(cl *Client) {
@@ -523,7 +552,7 @@ func closeClient(cl *Client) {
 func greeting(cl *Client) {
 	cl.res =
 		"250-" + Config["HOSTNAME"] + " Uluba-babula, [" + string(cl.addr) + "]" + "\r\n" +
-		"250-SIZE " + strconv.Itoa(max_size) + "\r\n" +
+		"250-SIZE " + strconv.Itoa(cDaemon["MAX_SIZE"]) + "\r\n" +
 		"250-PIPELINING\r\n" +
 		"250-8BITMIME\r\n"
 
@@ -535,6 +564,12 @@ func greeting(cl *Client) {
 }
 
 func rcpt_to(cl *Client) {
+	_,err := mail.ParseAddress(cl.rcpt_to)
+	if err != nil {
+		cl.res = "501 could not parse your mail from command"
+		return
+	}
+	
 	cl.rcpt_to = strings.Trim(cl.rcpt_to," \n\r")
         cl.rcpt_to = strings.Replace(cl.rcpt_to, "<", "", -1)
         cl.rcpt_to = strings.Replace(cl.rcpt_to, ">", "", -1)
@@ -567,7 +602,7 @@ func rcpt_to(cl *Client) {
 	
 	rcpt_path := Config["MAILDIR"]+cl.domain+"/"+cl.user
 
-        _, err := os.Open(rcpt_path)
+        _, err = os.Open(rcpt_path)
         if err != nil {
 		if Config["DEBUG"] == "1" {
 			log.Print("RCPT_TO Error: "+cl.domain+"/"+cl.user)
@@ -704,6 +739,12 @@ func nullTermToStrings(b []byte) (s []string) {
         return
 }
 
+func AuthFail(cl *Client,msg string) {
+	cl.res = "535 " + msg
+	cl.state = MAIL_EXIT
+	banHost(cl.addr)	
+}
+
 func AuthPlain(cl *Client,auth_b64 string) {
 	arr := nullTermToStrings([]byte(fromBase64(auth_b64)))
 	
@@ -711,8 +752,8 @@ func AuthPlain(cl *Client,auth_b64 string) {
         login := strings.Split(arr[1], "@")
 
 	// login && passwd no vacios
-        if validHost(login[1]) == "" || len(arr) < 3 { 
-		cl.res = "535 PLAIN Authentication failed"
+        if validHost(login[1]) == "" || len(arr) < 3 {
+		AuthFail(cl,"PLAIN Authentication failed")
 		return
         }
 	
@@ -727,20 +768,18 @@ func AuthPlain(cl *Client,auth_b64 string) {
 
 	switch {
 	case sqlerr == sql.ErrNoRows:
-		cl.res = "535 PLAIN Authentication failed for:"+arr[1]
-		cl.status = MAIL_EXIT
+                AuthFail(cl,"PLAIN Authentication failed")
 	case sqlerr != nil:
-		cl.res = "535 PLAIN Authentication failed"
-		cl.status = MAIL_EXIT
+                AuthFail(cl,"PLAIN Authentication failed")
 	default:
 		if Config["DEBUG"] == "1" {
-			log.Print(fmt.Printf("PMS: %s %s %d\n", pw_passwd,pw_dir,status))
+			log.Printf("PMS: %s %s %d\n", pw_passwd,pw_dir,status)
 		}
 		cl.res = "235 PLAIN Authentication successful for: "+arr[1]
                 cl.auth = true
+		cl.state = 1
 	}
-	
-        cl.state = 1
+
 }
 
 func AuthMD5(cl *Client) {
@@ -760,25 +799,19 @@ func AuthMD5(cl *Client) {
 	
 	input = strings.Replace(input,"\r\n","",-1)
 
-	if Config["DEBUG"] == "1" {
-		println("From : ",cl.addr ,"recv bytes of data =", input)
-	}
-
 	arr := strings.Split(fromBase64(input), " ")
 	login := strings.Split(arr[0],"@")
 
 	var pw_clear_passwd string
 
 	sqlerr := db.QueryRow("SELECT pw_clear_passwd FROM control WHERE pw_name = ? AND pw_domain = ? LIMIT 1", login[0],login[1]).Scan(&pw_clear_passwd)
-
+	
         switch {
 	case sqlerr == sql.ErrNoRows:
-                cl.res = "535 PLAIN Authentication failed for:"+arr[1]
-                cl.state = MAIL_EXIT
+                AuthFail(cl,"CRAM-MD5 Authentication failed")		
 		return
 	case sqlerr != nil:
-                cl.res = "535 PLAIN Authentication failed"
-                cl.state = MAIL_EXIT
+                AuthFail(cl,"CRAM-MD5 Authentication failed")
 		return
         }
 
@@ -793,7 +826,7 @@ func AuthMD5(cl *Client) {
 		cl.auth = true
 		cl.state = 1
 	} else {
-		cl.res = "535 CRAM-MD5 authentication failed for "+arr[0]
+                AuthFail(cl,"CRAM-MD5 Authentication failed for:"+arr[0])		
 	}
 	
 }
@@ -815,7 +848,7 @@ func Relay(cl *Client) {
         wc, err := c.Data()
 
         if err != nil {
-		fmt.Println(err)
+		log.Printf("Relay %v",err)
         }
 
         defer wc.Close()
@@ -972,4 +1005,18 @@ func fixCharset(charset string) string {
                 return fixed_charset
         }
         return charset
+}
+
+func banHost(host string) {
+	s := strings.Split(host, ":")
+
+	if bannedHosts[s[0]] == 0 {
+		bannedHosts[s[0]] = 1
+	} else if ( bannedHosts[s[0]] == cDaemon["BAN_LIMIT"] - 1 ) {
+		bannedHosts[s[0]] = int(time.Now().Unix()) + 3600
+	} else {
+		bannedHosts[s[0]] = bannedHosts[s[0]] + 1
+	}
+	
+	log.Printf("Banned: %s - %d",s[0],bannedHosts[s[0]])
 }
