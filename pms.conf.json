@@ -10,11 +10,12 @@
  "DB_NAME":"pms",
  "DB_HOST":"@unix(/var/run/mysqld/mysqld.sock)",
  "MDB_HOST":"@tcp(127.0.0.1:3306)",
- "AUTH_METHOD":"PLAIN",
+ "AUTH_METHOD":"PLAIN:CRAM-MD5",
  "CHECK_SPAMC":"0",
- "DEBUG":"1",
+ "DEBUG":"0",
  "SGID":"508",
  "GUID":"504",
  "TLS":"1",
- "SYMLINKS":"1"
+ "SYMLINKS":"1",
+ "LOG":"/tmp/pms.log"   
 }
