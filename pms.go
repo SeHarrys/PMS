@@ -1,14 +1,5 @@
 /*** PMS
 
-  - Header : Array para headers : add / del / edit
-   -- Checking a : MAIL FROM && RCPT TO
-  - handleSignals : ./server/camlistored/camlistored.go
-
-V 001
-
- + No respeta formato \r\n al agregar las cabeceras del SPAM
- - Estructura basica para el Maildir : https://github.com/luksen/maildir/blob/master/maildir.go
-
 ***/
 
 package main
@@ -55,6 +46,7 @@ type Client struct {
 	mail_to     string
         mail_from   string
 	mail_con    string           // Mail content
+	relay_rcpt  string
         rcpt_to     string
         read_buffer string
         res         string
@@ -73,6 +65,7 @@ type Client struct {
         errors      int
         clientID    int64
         savedNotify chan int
+	relayNotify chan int
 	tls_on      bool
 }
 
@@ -85,7 +78,9 @@ var bannedHosts = make(map[string]int,1)
 
 var clientID int64
 var sem chan int                  // currently active clients
+
 var WriteMailChan chan *Client    // Channel WriteMail
+var RelayMailChan chan *Client    // Channel RelayMail
 
 var Config = map[string]string {
 	"VERSION"    : "PMS 001",
@@ -184,11 +179,17 @@ func main() {
 	
 	// Channels
         sem = make(chan int, 10)
-        WriteMailChan = make(chan *Client, 10)
 	
-	for i := 0; i < 5; i++ {
+        WriteMailChan = make(chan *Client, 10)
+	RelayMailChan = make(chan *Client, 10)
+	
+	for i := 0; i < 10; i++ {
                 go WriteData()
         }
+
+	for i := 0; i < 10; i++ {
+		go RelayMail()
+	}
 	
 	srv, err := net.Listen("tcp",Config["LISTEN"])
 
@@ -221,6 +222,7 @@ func main() {
 			bufout:      bufio.NewWriter(conn),
 			clientID:    clientID,
 			savedNotify: make(chan int),
+			relayNotify: make(chan int),
 		})
                 clientID++
 	}
@@ -308,7 +310,7 @@ func Parser(cl *Client) {
                                 }
 				greeting(cl)
 			case strings.Index(cmd, "DATA") == 0:
-				if len(cl.mail_from) == 0 || len(cl.rcpt_to) == 0 {
+				if len(cl.mail_from) == 0 || len(cl.rcpt_to) == 0 && len(cl.relay_rcpt) == 0  {
                                         cl.res = "503 5.1.0 Bad syntax RCPT TO and MAIL FROM not defined"
                                         break
                                 }
@@ -351,12 +353,12 @@ func Parser(cl *Client) {
 				}
 			case strings.Index(cmd, "MAIL FROM:") == 0:
 				if len(cmd) > 10 {
-                                        cl.mail_from = cmd[10:]
-					_,err := mail.ParseAddress(cl.mail_from)
+					_,err = mail.ParseAddress(cmd[10:])
 					if err != nil {
 						cl.res = "501 could not parse your mail from command"
 						break
 					}
+					cl.mail_from = cmd[10:]
 				}
 				cl.res = "250 2.1.0 OK " +strconv.FormatInt(cl.clientID, 9)
 			case strings.Index(cmd, "RCPT TO:") == 0:
@@ -395,13 +397,23 @@ func Parser(cl *Client) {
                                 }
                                 break
                         }
-
+			
 			if cl.relay == true {
-				Relay(cl)
-				cl.state = MAIL_CMD
+				RelayMailChan <- cl
+				status := <-cl.relayNotify
+
+				if status == 1 {
+					cl.res = "250 2.0.0 OK " + cl.hash + " " + strconv.FormatInt(cl.clientID, 9)
+					cl.state = MAIL_CMD
+				} else if status == 500 {
+					cl.res = "554 Error: transaction failed"
+					cl.state = MAIL_EXIT
+				} else {
+					cl.res = "421 SMTP RELAY Error connect: "+Config["SMTP_RELAY"]
+					cl.state = MAIL_EXIT
+				}
 			} else if cl.status == 1 && cl.state == 4 { 
 				WriteMailChan <- cl
-				// wait for the save to complete
 				status := <-cl.savedNotify
 				
 				if status == 1 {
@@ -607,6 +619,7 @@ func rcpt_to(cl *Client,rcpt_to string) {
                 cl.state  = DENY_RELAY
 		return
         } else if ! allowedHosts[cl.domain] {
+		cl.relay_rcpt = rcpt_to
 		cl.relay  = true
 		cl.status = 1
                 return
@@ -863,33 +876,41 @@ func AuthMD5(cl *Client) {
 	
 }
 
-func Relay(cl *Client) {
-        c, err := smtp.Dial(Config["SMTP_RELAY"])
-	
-        if err != nil {
-                log.Println(err)
-		cl.res = "421 SMTP RELAY Error connect: "+Config["SMTP_RELAY"]
-		cl.state = MAIL_EXIT
-		return 
-        }
+func RelayMail() {
 
-        c.Mail(cl.mail_from)
-        c.Rcpt(cl.rcpt_to)
+	for {
+		cl := <-RelayMailChan
+		
+		c, err := smtp.Dial(Config["SMTP_RELAY"])
+		
+		if err != nil {
+			log.Println(err)
+			cl.relayNotify <- -1
+		}
+		
 
-        // Send the email body
-        wc, err := c.Data()
+		c.Mail(cl.mail_from)
+		c.Rcpt(cl.relay_rcpt)
 
-        if err != nil {
-		log.Printf("Relay %v",err)
-        }
+		// Send the email body
+		wc, err := c.Data()
+		
+		if err != nil {
+			log.Println(err)
+			cl.relayNotify <- 500
+		}
+		
+		defer wc.Close()
+		
+		buf := bytes.NewBufferString(cl.data)
+		
+		if _, err = buf.WriteTo(wc); err != nil {
+			log.Println(err)
+			cl.relayNotify <- 500
+		}
 
-        defer wc.Close()
-
-        buf := bytes.NewBufferString(cl.data)
-
-        if _, err = buf.WriteTo(wc); err != nil {
-		fmt.Println(err)
-        }
+		cl.relayNotify <- 1
+	}
 }
 
 func validateEmailData(client *Client) (user string, host string, addr_err error) {
@@ -1045,7 +1066,7 @@ func banHost(host string) {
 	if bannedHosts[s[0]] == 0 {
 		bannedHosts[s[0]] = 1
 	} else if ( bannedHosts[s[0]] == cDaemon["BAN_LIMIT"] - 1 ) {
-		bannedHosts[s[0]] = int(time.Now().Unix()) + 3600
+		bannedHosts[s[0]] = int(time.Now().Unix()) + cDaemon["BAN_TIME"]
 	} else {
 		bannedHosts[s[0]] = bannedHosts[s[0]] + 1
 	}
