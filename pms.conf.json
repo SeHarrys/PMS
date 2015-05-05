@@ -12,7 +12,7 @@
  "MDB_HOST":"@tcp(127.0.0.1:3306)",
  "AUTH_METHOD":"PLAIN:CRAM-MD5",
  "CHECK_SPAMC":"0",
- "DEBUG":"0",
+ "DEBUG":"1",
  "SGID":"508",
  "GUID":"504",
  "TLS":"1",

@@ -1,22 +1,13 @@
 /*** PMS
 
-  - SpamAssasin : github.com/saintienn/go-spamc
-  - Redis / MySQL
-  - Listen on two interfaces
   - Header : Array para headers : add / del / edit
    -- Checking a : MAIL FROM && RCPT TO
   - handleSignals : ./server/camlistored/camlistored.go
-  - DKIM
-  - LOG : Auth brute force
-  - RCPT_TO : Desde Config o DB
-  - Plugins
 
 V 001
 
  + No respeta formato \r\n al agregar las cabeceras del SPAM
- * Filters migrado qpsmtpd
  - Estructura basica para el Maildir : https://github.com/luksen/maildir/blob/master/maildir.go
- - Generar cabeceras basicas : TO / FROM / SUBJECT al parsear readData()
 
 ***/
 
@@ -90,8 +81,9 @@ var TLSconfig *tls.Config
 var db *sql.DB                    // Global mysql DB
 var timeout time.Duration
 var allowedHosts = make(map[string]bool, 16)
-var bannedHosts = make(map[string]int, 16)
+var bannedHosts = make(map[string]int,1)
 
+var clientID int64
 var sem chan int                  // currently active clients
 var WriteMailChan chan *Client    // Channel WriteMail
 
@@ -101,18 +93,22 @@ var Config = map[string]string {
 }
 
 var cDaemon = map[string]int {
-	"MAX_SIZE" : 131072,
-	"TIMEOUT"  : 60,
-	"STARTTLS" : 0,
-	"BAN_LIMIT": 4,
-	"BAN_TIME" : 3600,
+	"MAX_SIZE"   : 131072,
+	"TIMEOUT"    : 60,
+	"RELAY"      : 1,
+	"STARTTLS"   : 0,
+	"BAN_LIMIT"  : 4,
+	"BAN_TIME"   : 3600,
+	"AUTH_MD5"   : 0,
+	"AUTH_PLAIN" : 0,
+	"EARLYTALK"  : 0,
+	"MAX_ERRORS" : 4,
 }
 
 const (
 	RECV_BUF_LEN = 1024
 	MAIL_CMD     = 1
 	MAIL_AUTH    = 2
-	MAIL_RELAY   = 3
 	MAIL_QUEUE   = 4
 	MAIL_EXIT    = 5
 	MAIL_TLS     = 6
@@ -178,22 +174,7 @@ func main() {
 	}
 
 	// Domains valid RCPT
-	rows, err := db.Query("SELECT dominio FROM domains WHERE estado = 1")
-
-	if err != nil { log.Fatalln(err) }
-
-	for rows.Next() {
-		var domain string
-
-		if err := rows.Scan(&domain); err != nil {
-			log.Fatal(err)
-		}
-		allowedHosts[domain] = true
-	}
-
-	if err := rows.Err(); err != nil {
-		log.Fatalln(err)
-	}
+	ValidsRCPT()
 	
 	//if arr := strings.Split(Config["RCPT_HOSTS"], ","); len(arr) > 0 {
 	//	for i := 0; i < len(arr); i++ {
@@ -202,8 +183,8 @@ func main() {
 	//}
 	
 	// Channels
-        sem = make(chan int, 80)
-        WriteMailChan = make(chan *Client, 80)
+        sem = make(chan int, 10)
+        WriteMailChan = make(chan *Client, 10)
 	
 	for i := 0; i < 5; i++ {
                 go WriteData()
@@ -217,11 +198,10 @@ func main() {
 		log.Printf("Listen: %s",Config["LISTEN"])
 	}
 
-	go Checks()
-	
-	var clientID int64
 	clientID = 1
 
+	go Checks()
+	
 	for {
 		conn, err := srv.Accept()
 		if err != nil {
@@ -248,28 +228,53 @@ func main() {
 
 func Checks() {
 	for {
-		time.Sleep(3600 * time.Second)
+		log.Printf("Sesiones Abiertas: %d",clientID);
 		
+		time.Sleep(30 * time.Second)
+
 		for k,v := range bannedHosts {
 			if v > cDaemon["BAN_LIMIT"] && int(time.Now().Unix()) > v {
 				log.Printf("Limpiamos: %s - %d",k,v)
 				delete(bannedHosts,k)
 			}
+		}
+
+		ValidsRCPT()
 	}
 }
+
+func EarlyTalker(cl *Client)(ret int) {
+        cl.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	
+	_, err := cl.bufin.ReadByte()
+	
+	if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
+		ret = 1
+	} else {
+		ret = 0
+	}
+
+	return
 }
 
 func Parser(cl *Client) {
         defer closeClient(cl)
 
+	if cDaemon["EARLYTALK"] == 1 {
+		if EarlyCheck := EarlyTalker(cl); EarlyCheck == 0 {
+			cl.res = "550 Connecting host started transmitting before SMTP greeting\r\n"
+			cl.conn.Write([]byte(string(cl.res)))
+			return
+		}
+	}
+	
 	var counter_cmd int
 
 	cl.res = "220 " + Config["HOSTNAME"] + " ESMTP " + strconv.FormatInt(cl.clientID, 9) + " " + Config["VERSION"] + "\r\n"
-
 	cl.state = 1
 	cl.conn.Write([]byte(string(cl.res)))
 
-	for i := 0; i < 64; i++ {
+	for i := 0; i < 24; i++ {
 
 		s := strings.Split(cl.addr, ":")
 		if bannedHosts[s[0]] > 3 {
@@ -284,7 +289,6 @@ func Parser(cl *Client) {
 		case 1:
                         input, err := readSmtp(cl)
                         if err != nil {
-                                log.Printf("%s Read error: %v",cl.addr, err)
                                 if err == io.EOF {
                                         //killClient(cl)
 					return
@@ -295,7 +299,6 @@ func Parser(cl *Client) {
                                 }
                                 break
                         }
-
                         //input = strings.Trim(input, " \n\r")
                         cmd := strings.ToUpper(input)
 			switch {
@@ -312,8 +315,15 @@ func Parser(cl *Client) {
 				cl.res = "354 go ahead"
 				cl.state = MAIL_QUEUE
 			case strings.Index(cmd, "STARTTLS") == 0:
-                                cl.res = "220 2.0.0 Go TLS"
-                                cl.state = MAIL_TLS
+				if cl.tls_on {
+					cl.res = "502 STARTTLS is active"
+					cl.state = MAIL_CMD
+				} else {
+					cl.res = "220 2.0.0 Go TLS"
+					cl.state = MAIL_TLS
+				}
+			case strings.Index(cmd, "NOOP") == 0:
+				cl.res = "220 2.0.0 OK"
 			case strings.Index(cmd, "AUTH") == 0:
 				//Auth(cl,auth_method)
 				auth_method := input[5:]
@@ -350,18 +360,20 @@ func Parser(cl *Client) {
 				}
 				cl.res = "250 2.1.0 OK " +strconv.FormatInt(cl.clientID, 9)
 			case strings.Index(cmd, "RCPT TO:") == 0:
+
 				if len(cl.mail_from) == 0 {
 					cl.res = "503 5.1.0 Bad syntax RCPT TO is before MAIL FROM"
 					break
 				}
+				
                                 if len(cmd) > 8 {
-                                        cl.rcpt_to = cmd[8:]
-					rcpt_to(cl)
+					rcpt_to(cl,cmd[8:])
                                 }
 
 				if cl.status == 1 {
 					cl.res = "250 2.1.5 OK " +strconv.FormatInt(cl.clientID, 9)
 				}
+				
 			case strings.Index(cmd, "QUIT") == 0:
 				killClient(cl,"221 2.0.0 " + strconv.FormatInt(cl.clientID, 9) + " closing connection.")
 			default:
@@ -369,11 +381,7 @@ func Parser(cl *Client) {
 				cl.res = "502 5.5.1 Unrecognized command."
 			}
 		case 2:
-			//Auth(cl)
 		case 3:
-			if cl.auth == true {
-				Relay(cl)
-			}
 		case 4:
 			var err error
 			cl.data, err = readData(cl)
@@ -387,8 +395,11 @@ func Parser(cl *Client) {
                                 }
                                 break
                         }
-			
-			if cl.status == 1 && cl.state == 4 { 
+
+			if cl.relay == true {
+				Relay(cl)
+				cl.state = MAIL_CMD
+			} else if cl.status == 1 && cl.state == 4 { 
 				WriteMailChan <- cl
 				// wait for the save to complete
 				status := <-cl.savedNotify
@@ -403,13 +414,10 @@ func Parser(cl *Client) {
 					cl.res = "554 Error: transaction failed"
 					cl.state = MAIL_EXIT
 				}
-			} else if cl.status == 2 {
-				Relay(cl)
-				cl.state = MAIL_CMD
 			}
 
 		case 5:
-			//killClient(cl,"")
+			//killClient(cl,cl.res)
 		case 6:
 			var tlsConn *tls.Conn
 			tlsConn = tls.Server(cl.conn, TLSconfig)
@@ -427,7 +435,13 @@ func Parser(cl *Client) {
 		case 550:
 			killClient(cl,"550 5.7.1 Relaying denied")
 		case 551:
-			killClient(cl,"550 5.1.1 The user does not exist")
+			cl.res = "550 5.1.1 The user does not exist"
+			cl.errors++
+			if ( cl.errors > cDaemon["MAX_ERRORS"] ) {
+				killClient(cl,"550 Oh noo")
+			} else {
+				cl.state = 1
+			}
 		case 552:
 			killClient(cl,"550 You are SPAM to me")
 		}
@@ -563,18 +577,18 @@ func greeting(cl *Client) {
 	cl.res = cl.res + "250 AUTH PLAIN CRAM-MD5"
 }
 
-func rcpt_to(cl *Client) {
-	_,err := mail.ParseAddress(cl.rcpt_to)
+func rcpt_to(cl *Client,rcpt_to string) {
+	_,err := mail.ParseAddress(rcpt_to)
 	if err != nil {
 		cl.res = "501 could not parse your mail from command"
 		return
 	}
-	
-	cl.rcpt_to = strings.Trim(cl.rcpt_to," \n\r")
-        cl.rcpt_to = strings.Replace(cl.rcpt_to, "<", "", -1)
-        cl.rcpt_to = strings.Replace(cl.rcpt_to, ">", "", -1)
 
-        s := strings.Split(cl.rcpt_to, "@")
+	rcpt_to = strings.Trim(rcpt_to," \n\r")
+	rcpt_to = strings.Replace(rcpt_to, "<", "", -1)
+	rcpt_to = strings.Replace(rcpt_to, ">", "", -1)
+	
+        s := strings.Split(rcpt_to, "@")
 
 	if len(s) < 2 {
 		cl.state = DENY_USER
@@ -593,7 +607,8 @@ func rcpt_to(cl *Client) {
                 cl.state  = DENY_RELAY
 		return
         } else if ! allowedHosts[cl.domain] {
-                cl.state = MAIL_RELAY
+		cl.relay  = true
+		cl.status = 1
                 return
         } else 	if ! validUser(cl.user) {
 		cl.state = DENY_USER
@@ -611,7 +626,15 @@ func rcpt_to(cl *Client) {
 		cl.status = 0
         } else {
 		cl.status = 1
+
+		if len(cl.rcpt_to) > 0 {
+			cl.rcpt_to = cl.rcpt_to + "," + rcpt_to
+		} else {
+			cl.rcpt_to = rcpt_to
+		}
+		
 	}
+	
 }
 
 func spam(cl *Client) {
@@ -646,37 +669,45 @@ func WriteData() {
 
 		if cl.user == cl.mail_from && ! cl.auth { cl.savedNotify <- -1 }
 
-		add_head := ""
-                add_head += "Delivered-To: " + cl.rcpt_to + "\r\n"
-                add_head += "Received: from " + cl.helo + " (" + cl.helo + "  [" + cl.addr + "])\r\n"
-                add_head += "   by " + Config["HOSTNAME"] + " with SMTP id " + cl.hash + "@" + Config["HOSTNAME"] + ";\r\n"
-                add_head += "   " + time.Now().Format(time.RFC1123Z) + "\r\n"
+		res := strings.Split(cl.rcpt_to,",")
 
-		//cl.headers["EMail-Server"] = "PMS 0001"
-
-		for k,v := range cl.headers {
-			add_head += k + ": " + v + "\r\n"
+		for i := range res {
+			my_rcpt := res[i]
+		        s := strings.Split(my_rcpt, "@")
+			email, domain := strings.ToLower(s[0]),strings.ToLower(s[1])
+			
+			add_head := ""
+			add_head += "Delivered-To: " + my_rcpt + "\r\n"
+			add_head += "Received: from " + cl.helo + " (" + cl.helo + "  [" + cl.addr + "])\r\n"
+			add_head += "   by " + Config["HOSTNAME"] + " with SMTP id " + cl.hash + "@" + Config["HOSTNAME"] + ";\r\n"
+			add_head += "   " + time.Now().Format(time.RFC1123Z) + "\r\n"
+			
+			cl.headers["X-EMail-Server"] = Config["VERSION"]
+			
+			for k,v := range cl.headers {
+				add_head += k + ": " + v + "\r\n"
+			}
+			
+			cl.data = add_head + cl.mail_con
+			
+			real_dir := Config["MAILDIR"] + domain + "/" + email + "/"
+			new_dir,_ := filepath.EvalSymlinks(real_dir)
+			
+			parts := strings.Split(new_dir,"/")
+			leng  := len(parts)
+			
+			pms_user := parts[leng - 1]
+			pms_domain := parts[leng - 2]
+			
+			// Filters EMail
+			var dir_out string = filterDb(cl,pms_user,pms_domain)
+			
+			var my_file string = Config["MAILDIR"] + domain + "/" + email + "/Maildir/" + dir_out + "new/" +
+				strconv.FormatInt(cl.clientID, 9) + "_" + cl.hash + ":2,"
+			
+			saveFile(cl,my_file)
 		}
-
-                cl.data = add_head + cl.mail_con
 		
-		real_dir := Config["MAILDIR"] + cl.domain + "/" + cl.user + "/"
-		new_dir,_ := filepath.EvalSymlinks(real_dir)
-
-		parts := strings.Split(new_dir,"/")
-		leng  := len(parts)
-
-		pms_user := parts[leng - 1]
-		pms_domain := parts[leng - 2]
-
-		// Filters EMail
-		var dir_out string = filterDb(cl,pms_user,pms_domain)
-
-		var my_file string = Config["MAILDIR"] + cl.domain + "/" + cl.user + "/Maildir/" + dir_out + "new/" +
-			strconv.FormatInt(cl.clientID, 9) + "_" + cl.hash + ":2,"
-
-		saveFile(cl,my_file)
-
 		cl.savedNotify <- 1
 	}
 }
@@ -742,6 +773,7 @@ func nullTermToStrings(b []byte) (s []string) {
 func AuthFail(cl *Client,msg string) {
 	cl.res = "535 " + msg
 	cl.state = MAIL_EXIT
+	cl.kill_time = time.Now().Unix()
 	banHost(cl.addr)	
 }
 
@@ -1019,4 +1051,23 @@ func banHost(host string) {
 	}
 	
 	log.Printf("Banned: %s - %d",s[0],bannedHosts[s[0]])
+}
+
+func ValidsRCPT() {
+        rows, err := db.Query("SELECT dominio FROM domains WHERE estado = 1")
+	
+	if err != nil { log.Fatalln(err) }
+	
+	for rows.Next() {
+		var domain string
+		
+		if err := rows.Scan(&domain); err != nil {
+			log.Fatal(err)
+		}
+		allowedHosts[domain] = true
+	}
+	
+	if err := rows.Err(); err != nil {
+		log.Fatalln(err)
+	}
 }
