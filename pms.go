@@ -30,6 +30,7 @@ import (
 
 type Client struct {
 	IP	    []byte // IPv4 4bytes - IPv6 16bytes
+	host        string
 	auth        bool
 	relay       bool
         state       int
@@ -38,7 +39,6 @@ type Client struct {
 	mail_to     string
         mail_from   string
 	mail_con    string           // Mail content
-	relay_rcpt  string
         rcpt_to     string
 	my_rcpt     string           // Actual RCPT
         read_buffer string
@@ -219,7 +219,7 @@ func Parser(cl *Client) {
 			return
 		}
 	}
-	
+
 	var counter_cmd int
 
 	cl.res = "220 " + Config["HOSTNAME"] + " ESMTP " + strconv.FormatInt(cl.clientID, 9) + " " + Config["VERSION"] + "\r\n"
@@ -260,7 +260,7 @@ func Parser(cl *Client) {
                                 }
 				greeting(cl)
 			case strings.Index(cmd, "DATA") == 0:
-				if len(cl.mail_from) == 0 || len(cl.rcpt_to) == 0 && len(cl.relay_rcpt) == 0  {
+				if len(cl.mail_from) == 0 || len(cl.rcpt_to) == 0 {
                                         cl.res = "503 5.1.0 Bad syntax RCPT TO and MAIL FROM not defined"
                                         break
                                 }
@@ -352,11 +352,13 @@ func Parser(cl *Client) {
                                 }
                                 break
                         }
-
+			
+			log.Println(cl.rcpt_to)
 			res := strings.Split(cl.rcpt_to,",")
 
 			for i := range res {
 				s := strings.Split(res[i], "@")
+				log.Println(s[1])
 				domain := strings.ToLower(s[1])
 				cl.my_rcpt = res[i]
 
@@ -382,6 +384,9 @@ func Parser(cl *Client) {
 					
 					if status == 1 {
 						cl.res = "250 2.0.0 OK " + cl.hash + " " + strconv.FormatInt(cl.clientID, 9)
+						cl.state = MAIL_CMD
+					} else if status == 452 {
+						cl.res = "452 Error: message temporarily denied"
 						cl.state = MAIL_CMD
 					} else if status == 500 {
 						cl.res = "554 Error: queue"
@@ -571,7 +576,7 @@ func WriteData() {
 		add_head += "   by " + Config["HOSTNAME"] + " with SMTP id " + cl.hash + "@" + Config["HOSTNAME"] + ";\r\n"
 		add_head += "   " + time.Now().Format(time.RFC1123Z) + "\r\n"
 		
-		cl.headers["X-EMail-Server"] = Config["VERSION"]
+		cl.headers["X-EMail"] = Config["VERSION"]
 		
 		for k,v := range cl.headers {
 			add_head += k + ": " + v + "\r\n"
@@ -601,16 +606,19 @@ func WriteData() {
 }
 
 func filterDb(cl *Client,pms_user string,pms_domain string) (dir_out string) {
+	dir_out = ""
 	
 	rows, err := db.Query("SELECT f.method,f.method_arg,f.value,f.out FROM control c LEFT JOIN filters f ON f.control = c.id WHERE c.pw_name = ? AND c.pw_domain = ?",pms_user,pms_domain)
 
-	if err != nil { log.Fatal(err) }
+	if err != nil {
+		return
+	}
 
 	for rows.Next() {
 		var method, method_arg, out, value string
 
 		if err := rows.Scan(&method,&method_arg,&value,&out); err != nil {
-			log.Fatal(err)
+			return
 		}
 
 		if method == "from" && strings.ToUpper(cl.headers["From"]) == strings.ToUpper(value) {
@@ -623,7 +631,7 @@ func filterDb(cl *Client,pms_user string,pms_domain string) (dir_out string) {
 	}
 
 	if err := rows.Err(); err != nil {
-		log.Fatal(err)
+		return
 	}
 	
 	return
@@ -637,17 +645,16 @@ func saveFile(cl *Client,my_file string) {
 	}
 	
 	file, err := os.Create(my_file)
-
+        defer file.Close()
+	
 	if err != nil {
 		log.Println(err)
-		cl.savedNotify <- 500
-		return
+		cl.savedNotify <- 452
 	}
 	
 	w := bufio.NewWriter(file)
 	fmt.Fprint(w, cl.data)
 	w.Flush()
-	file.Close()	
 }
 
 func RelayMail() {
@@ -664,7 +671,7 @@ func RelayMail() {
 		
 
 		c.Mail(cl.mail_from)
-		c.Rcpt(cl.relay_rcpt)
+		c.Rcpt(cl.my_rcpt)
 
 		// Send the email body
 		wc, err := c.Data()

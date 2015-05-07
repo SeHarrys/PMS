@@ -50,7 +50,7 @@ func rcpt_to(cl *Client,rcpt_to string) {
 		cl.state = DENY_USER
 		return
         } else if ! allowedHosts[cl.domain] && cl.auth == true {
-		cl.relay_rcpt = rcpt_to
+		cl.rcpt_to = rcpt_to
 		cl.relay  = true
 		cl.status = 1
                 return

@@ -19,14 +19,20 @@ func AuthFail(cl *Client,msg string) {
 	banHost(cl.addr)	
 }
 
+// TODO: Checks or remove
 func AuthPlain(cl *Client,auth_b64 string) {
 	arr := nullTermToStrings([]byte(fromBase64(auth_b64)))
+
+	if len(arr) < 3 {
+		AuthFail(cl,"PLAIN Authentication failed")
+		return
+	}
 	
 	// El 1 elemento es null
         login := strings.Split(arr[1], "@")
 
 	// login && passwd no vacios
-        if validHost(login[1]) == "" || len(arr) < 3 {
+        if validHost(login[1]) == "" { //|| len(arr) < 3 {
 		AuthFail(cl,"PLAIN Authentication failed")
 		return
         }
