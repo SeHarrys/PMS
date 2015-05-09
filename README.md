@@ -9,37 +9,47 @@
 
   For the config file first read PMS_CONFIG environment and next file pms.conf.json
 
-# Autoresponder
+```shell
+go get github.com/SeHarrys/PMS
+```
 
-# Auth
+## Autoresponder
+
+  TODO
+  
+## Auth
 
   Is authenticade user and relay is enabled
 
-# Queue
+## Queue
 
   The emails are saved in files in Maildir format
   
-# Relay
+## Relay
 
   For send emails you can specify a relay server for example postfix at 127.0.0.1:12025
   
-# DKIM
+## DKIM
 
   In the relay server
   
-# SPAM
+## SPAM
 
   It's my breakfast
   
-# Virus
+## Virus
 
   TODO ClamAV
 
-# DMARC
+## DMARC
 
   TODO parse XML and report (make db filter)
 
-# Plugins
+## Plugins
 
   earlytalker: Check that the client doesn't talk before we send the SMTP banner (qpsmtpd)
   spamc      : spamassasin client
+
+## Web Interface
+
+  You can get https://github.com/SeHarrys/pms-web a admin web interface made with Mojolicious (Perl)
