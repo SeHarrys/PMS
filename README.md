@@ -47,9 +47,12 @@ go get github.com/SeHarrys/PMS
 
 ## Plugins
 
-  earlytalker: Check that the client doesn't talk before we send the SMTP banner (qpsmtpd)
-  spamc      : spamassasin client
-
+  earlytalker : Check that the client doesn't talk before we send the SMTP banner (qpsmtpd)
+  
+  spamc       : spamassasin client
+  
+  greylisting : 
+  
 ## Web Interface
 
   You can get https://github.com/SeHarrys/pms-web a admin web interface made with Mojolicious (Perl)
