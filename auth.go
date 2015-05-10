@@ -14,8 +14,7 @@ import (
 
 func AuthFail(cl *Client,msg string) {
 	cl.res = "535 " + msg
-	cl.state = MAIL_EXIT
-	cl.kill_time = time.Now().Unix()
+	//cl.kill_time = time.Now().Unix()
 	banHost(cl.addr)	
 }
 
@@ -52,7 +51,7 @@ func AuthPlain(cl *Client,auth_b64 string) {
 	case sqlerr != nil:
                 AuthFail(cl,"PLAIN Authentication failed")
 	default:
-		if Config["DEBUG"] == "1" {
+		if Config.C.Debug == true {
 			log.Printf("PMS: %s %s %d\n", pw_passwd,pw_dir,status)
 		}
 		cl.res = "235 PLAIN Authentication successful for: "+arr[1]
@@ -63,7 +62,7 @@ func AuthPlain(cl *Client,auth_b64 string) {
 }
 
 func AuthMD5(cl *Client) {
-	str := toBase64(fmt.Sprintf("<%x.%x@%s>", cl.hash , time.Now().Unix(), Config["HOSTNAME"]))
+	str := toBase64(fmt.Sprintf("<%x.%x@%s>", cl.hash , time.Now().Unix(), Config.C.Host))
 
         cl.res = "334 " + str + "\r\n"
         cl.conn.Write([]byte(string(cl.res)))

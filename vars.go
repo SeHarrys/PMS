@@ -1,21 +1,40 @@
 package main
 
-var Config = map[string]string {
-	"VERSION"    : "PMS 001",
-	"CONFIG"     : "pms.conf.json",
-}
+import (
+	"log"
+	"os"
+)
 
-var cDaemon = map[string]int {
-	"MAX_SIZE"   : 131072,
-	"TIMEOUT"    : 60,
-	"RELAY"      : 1,
-	"STARTTLS"   : 0,
-	"BAN_LIMIT"  : 4,
-	"BAN_TIME"   : 3600,
-	"AUTH_MD5"   : 0,
-	"AUTH_PLAIN" : 0,
-	"EARLYTALK"  : 0,
-	"MAX_ERRORS" : 3,
+type Cfg struct {
+	Daemon struct {
+		Listen string
+		Tls bool
+		Timeout int
+	}
+	Smtp struct {
+		Maxsize int
+		Maxrcpts int
+		Maxerrors int
+		Banlimit int
+		Bantime int
+	}
+	Queue struct {
+		Maildir string
+		Hidereceived bool
+	}
+	Db struct {
+		User string
+		Pass string
+		Name string
+		Host string
+	}
+	C struct {
+		Debug bool
+		Relay string
+		Host string
+		Logfile string
+		Plugs string
+	}
 }
 
 const (
@@ -33,3 +52,19 @@ const (
 	CL_QUEUE     = 1
 	CL_RELAY     = 2
 )
+
+func Log(msg string) {
+
+	if Config.C.Logfile != "" {
+		fd, err := os.OpenFile(Config.C.Logfile, os.O_RDWR | os.O_CREATE | os.O_APPEND, 0666)
+		defer fd.Close()
+		
+		if err != nil {
+			log.Fatalf("Error log file: %v", err)
+		}
+
+		log.SetOutput(fd)
+	}
+
+	log.Println(msg)
+}

@@ -5,6 +5,7 @@ import(
 	"net"
 	"strings"
 	"github.com/saintienn/go-spamc"
+	//"github.com/mirtchovski/clamav"
 )
 
 func EarlyTalker(cl *Client)(ret int) {
@@ -21,7 +22,7 @@ func EarlyTalker(cl *Client)(ret int) {
 	return
 }
 
-func spam(cl *Client) {
+func Spamc(cl *Client) {
 	spam := spamc.New("127.0.0.1:783",10)
 
 	reply, _ := spam.Process(cl.data)
@@ -37,7 +38,13 @@ func spam(cl *Client) {
 	if str, ok := reply.Vars["body"].(string); ok {
 		str = strings.Trim(str, " \n\r")
 		cl.data = str
-	} else {
-		//cl.state = DENY_RELAY
 	}
+}
+
+func ClamAV(cl *Client) {
+
+}
+
+func WhiteList(cl *Client)(status bool) {
+	return false
 }

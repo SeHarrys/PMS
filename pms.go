@@ -1,5 +1,6 @@
 /*** PMS
 
+ Redis stats
 ***/
 
 package main
@@ -10,7 +11,6 @@ import (
 	"crypto/tls"
 	"crypto/rand"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"runtime"
+	"code.google.com/p/gcfg"
 	_"github.com/go-sql-driver/mysql"
 )
 
@@ -32,7 +33,6 @@ type Client struct {
 	IP	    []byte // IPv4 4bytes - IPv6 16bytes
 	host        string
 	auth        bool
-	relay       bool
         state       int
 	status      int
         helo        string
@@ -40,7 +40,9 @@ type Client struct {
         mail_from   string
 	mail_con    string           // Mail content
         rcpt_to     string
+	rcpts       map[string]string
 	my_rcpt     string           // Actual RCPT
+	rcpts_count int              // Stupid but rcpts duplicates...
         read_buffer string
         res         string
         addr        string
@@ -66,80 +68,76 @@ var TLSconfig *tls.Config
 
 var db *sql.DB                    // Global mysql DB
 var timeout time.Duration
-var allowedHosts = make(map[string]bool, 16)
-var bannedHosts = make(map[string]int,1)
+var allowedHosts = make(map[string]bool)
+var bannedHosts = make(map[string]int)
+var Plugins = make(map[string]bool)
 
 var clientID int64
 var sem chan int                  // currently active clients
 
 var WriteMailChan chan *Client    // Channel WriteMail
 var RelayMailChan chan *Client    // Channel RelayMail
+var Version = "PMS 001"
+var Config Cfg
 
 type Daemon struct {
 	LimitConn int // Max connections
 	TLSconfig *tls.Config
+	bannedHosts map[string]int
 }
 
 func main() {
-        log.Printf("%s - Go %s (%s/%s) - CPUs %d",Config["VERSION"],runtime.Version(),runtime.GOOS,runtime.GOARCH,runtime.NumCPU())
+        log.Printf("%s - Go %s (%s/%s) - CPUs %d",Version,runtime.Version(),runtime.GOOS,runtime.GOARCH,runtime.NumCPU())
 
-	// Read config from env 
+	var cfgFile = "pms.conf"
+
 	if os.Getenv("PMS_CONFIG") != "" {
-		Config["CONFIG"] = os.Getenv("PMS_CONFIG")
+		cfgFile = os.Getenv("PMS_CONFIG")
 	}
 	
-        b, err := ioutil.ReadFile(Config["CONFIG"])
-        if err != nil {
-                log.Fatalln("Could not read config file: " + Config["CONFIG"])
-        }
+	err := gcfg.ReadFileInto(&Config, cfgFile)
 
-        var myConfig map[string]string
-        err = json.Unmarshal(b, &myConfig)
-        if err != nil {
-                log.Fatalln("Could not parse config file")
-        }
+	if err != nil {
+		fmt.Printf("%v",err)
+	}
 
-        for k, v := range myConfig {
-                Config[k] = v
-        }
+	// SET Plugins
+	plgns := strings.Split(Config.C.Plugs,":")
+	for plg := range plgns {
+		Plugins[plgns[plg]] = true
+	}
 
 	// Enabled TLS
-	if Config["TLS"] == "1" {
-		cDaemon["STARTTLS"] = 1
+	if Config.Daemon.Tls == true {
 		cert, err := tls.LoadX509KeyPair("./pms-cert.pem", "./pms-cert.key")
 		if err != nil {
 			log.Fatalln("Error: tls.LoadX509KeyPair")
 		}
-		TLSconfig = &tls.Config{Certificates: []tls.Certificate{cert}, ClientAuth: tls.VerifyClientCertIfGiven, ServerName: Config["HOSTNAME"] }
+		TLSconfig = &tls.Config{Certificates: []tls.Certificate{cert}, ClientAuth: tls.VerifyClientCertIfGiven, ServerName: Config.C.Host }
 		TLSconfig.Rand = rand.Reader
 	}
 
-	timeout = time.Duration(cDaemon["TIMEOUT"])
+	timeout = time.Duration(Config.Daemon.Timeout)
 
 	// init MySQL
-	db, err = sql.Open("mysql", Config["DB_USER"]+":"+Config["DB_PASS"]+Config["DB_HOST"]+"/"+Config["DB_NAME"])
+	db, err = sql.Open("mysql", Config.Db.User + ":" + Config.Db.Pass + Config.Db.Host + "/" + Config.Db.Name)
         defer db.Close()
 	
         if err != nil {
                 log.Fatalf("Error on init mysql: %s", err.Error())
                 return
         }
+	
+        db.SetMaxOpenConns(40)	
+	db.SetMaxIdleConns(60)
 
-	db.SetMaxIdleConns(120)
-
-	err = db.Ping() // This DOES open a connection if necessary. This makes sure the database is accessible
+	err = db.Ping()
 	if err != nil {
 		log.Fatalf("Error on opening database connection: %s", err.Error())
 	}
 
 	// Domains valid RCPT
 	ValidsRCPT()
-	
-	//if arr := strings.Split(Config["RCPT_HOSTS"], ","); len(arr) > 0 {
-	//	for i := 0; i < len(arr); i++ {
-	//		allowedHosts[arr[i]] = true
-	//	}
-	//}
 	
 	// Channels
         sem = make(chan int, 20)
@@ -155,12 +153,12 @@ func main() {
 		go RelayMail()
 	}
 	
-	srv, err := net.Listen("tcp",Config["LISTEN"])
+	srv, err := net.Listen("tcp",Config.Daemon.Listen)
 
 	if err != nil {
 		log.Fatalln("Error Listen :", err.Error())
 	} else {
-		log.Printf("Listen: %s",Config["LISTEN"])
+		Log("Listen: " + Config.Daemon.Listen)
 	}
 
 	clientID = 1
@@ -181,6 +179,7 @@ func main() {
 			conn:        conn,
 			addr:        conn.RemoteAddr().String(),
 			headers:     make(map[string]string),
+		        rcpts:       make(map[string]string),
 			time:        time.Now().Unix(),
 			bufin:       bufio.NewReader(conn),
 			bufout:      bufio.NewWriter(conn),
@@ -194,13 +193,13 @@ func main() {
 
 func Checks() {
 	for {
-		log.Printf("Sesiones Abiertas: %d",clientID);
+		fmt.Printf("Sesiones Abiertas: %d\n",clientID);
 		
-		time.Sleep(3600 * time.Second)
+		time.Sleep(1800 * time.Second)
 
 		for k,v := range bannedHosts {
-			if v > cDaemon["BAN_LIMIT"] && int(time.Now().Unix()) > v {
-				log.Printf("Limpiamos: %s - %d",k,v)
+			if v > Config.Smtp.Banlimit && int(time.Now().Unix()) > v {
+				fmt.Printf("Limpiamos: %s - %d\n",k,v)
 				delete(bannedHosts,k)
 			}
 		}
@@ -212,7 +211,11 @@ func Checks() {
 func Parser(cl *Client) {
         defer closeClient(cl)
 
-	if cDaemon["EARLYTALK"] == 1 {
+	if Config.C.Debug == true {
+		Log("Incoming: "+cl.addr)
+	}
+	
+	if Plugins["earlytalk"] == true {
 		if EarlyCheck := EarlyTalker(cl); EarlyCheck == 0 {
 			cl.res = "550 Connecting host started transmitting before SMTP greeting\r\n"
 			cl.conn.Write([]byte(string(cl.res)))
@@ -222,13 +225,14 @@ func Parser(cl *Client) {
 
 	var counter_cmd int
 
-	cl.res = "220 " + Config["HOSTNAME"] + " ESMTP " + strconv.FormatInt(cl.clientID, 9) + " " + Config["VERSION"] + "\r\n"
+	cl.res = "220 " + Config.C.Host + " ESMTP " + strconv.FormatInt(cl.clientID, 9) + " " + Version + "\r\n"
 	cl.state = 1
 	cl.conn.Write([]byte(string(cl.res)))
 
 	for i := 0; i < 24; i++ {
-
+		
 		s := strings.Split(cl.addr, ":")
+
 		if bannedHosts[s[0]] > 3 {
 			killClient(cl,"521 You are banned")
 		}
@@ -260,7 +264,7 @@ func Parser(cl *Client) {
                                 }
 				greeting(cl)
 			case strings.Index(cmd, "DATA") == 0:
-				if len(cl.mail_from) == 0 || len(cl.rcpt_to) == 0 {
+				if len(cl.mail_from) == 0 || len(cl.rcpts) == 0 {
                                         cl.res = "503 5.1.0 Bad syntax RCPT TO and MAIL FROM not defined"
                                         break
                                 }
@@ -299,7 +303,8 @@ func Parser(cl *Client) {
 						AuthPlain(cl,string(my_buf))
 					}
 				default:
-					cl.res = "504 Undefinied authentication method"
+					cl.res = "504 5.5.1 Undefinied authentication method"
+					cl.errors++
 				}
 			case strings.Index(cmd, "MAIL FROM:") == 0:
 				if len(cmd) > 10 {
@@ -312,27 +317,33 @@ func Parser(cl *Client) {
 				}
 				cl.res = "250 2.1.0 OK " +strconv.FormatInt(cl.clientID, 9)
 			case strings.Index(cmd, "RCPT TO:") == 0:
-
+				
+				if cl.rcpts_count > Config.Smtp.Maxrcpts {
+					killClient(cl,"452 4.5.3 To many recipient")
+					break
+				}
+				
 				if len(cl.mail_from) == 0 {
 					cl.res = "503 5.1.0 Bad syntax RCPT TO is before MAIL FROM"
 					break
 				}
-				
-                                if len(cmd) > 8 {
-					rcpt_to(cl,cmd[8:])
-                                }
 
+				rcpt_to(cl,cmd[8:])
+				
 				if cl.status == 1 {
 					cl.res = "250 2.1.5 OK " +strconv.FormatInt(cl.clientID, 9)
-				}
-
-				if cl.relay == true {
-					cl.res = cl.res + " relay"
-					cl.relay = false
+				} else if cl.status == 2 {
+					cl.res = "250 2.1.5 OK " +strconv.FormatInt(cl.clientID, 9)+ " but rcpt_to is repeat"
+				} else if cl.status == 3 {
+					cl.res = "250 2.1.5 OK " +strconv.FormatInt(cl.clientID, 9)+ " relay"
+				} else {
+					Log("RCPT TO: "+cmd[8:])
+					cl.res = "550 5.1.1 The user does not exist"
+					cl.errors++
 				}
 
 			case strings.Index(cmd, "QUIT") == 0:
-				killClient(cl,"221 2.0.0 " + Config["HOSTNAME"] + " closing connection.")
+				killClient(cl,"221 2.0.0 " + Config.C.Host + " closing connection.")
 			default:
 				counter_cmd++
 				cl.res = "502 5.5.1 Unrecognized command."
@@ -353,17 +364,10 @@ func Parser(cl *Client) {
                                 break
                         }
 			
-			log.Println(cl.rcpt_to)
-			res := strings.Split(cl.rcpt_to,",")
+			for i := range cl.rcpts {
+				cl.my_rcpt = i
 
-			for i := range res {
-				s := strings.Split(res[i], "@")
-				log.Println(s[1])
-				domain := strings.ToLower(s[1])
-				cl.my_rcpt = res[i]
-
-				if ! allowedHosts[domain] {
-					//if cl.relay == true {
+				if cl.rcpts[i] == "relay" {
 					RelayMailChan <- cl
 					status := <-cl.relayNotify
 					
@@ -374,11 +378,10 @@ func Parser(cl *Client) {
 						cl.res = "554 Error: transaction failed"
 						cl.state = MAIL_EXIT
 					} else {
-						cl.res = "421 SMTP RELAY Error connect: "+Config["SMTP_RELAY"]
+						cl.res = "421 SMTP RELAY Error connect: " + Config.C.Relay
 						cl.state = MAIL_EXIT
 					}
 				} else {
-					//} else if cl.state == 4 { // cl.status == 1 && 
 					WriteMailChan <- cl
 					status := <-cl.savedNotify
 					
@@ -399,6 +402,7 @@ func Parser(cl *Client) {
 			}
 			
 		case 5:
+			break
 		case 6:
 			var tlsConn *tls.Conn
 			tlsConn = tls.Server(cl.conn, TLSconfig)
@@ -415,16 +419,16 @@ func Parser(cl *Client) {
 		case 8:
 		case 550:
 			killClient(cl,"550 5.7.1 Relaying denied")
-		case 551:
-			cl.res = "550 5.1.1 The user does not exist"
-			cl.errors++
-			if ( cl.errors >= cDaemon["MAX_ERRORS"] ) {
-				killClient(cl,"221 Oh no to many errors")
-			} else {
-				cl.state = 1
-			}
 		case 552:
 			killClient(cl,"550 You are SPAM to me")
+		}
+
+		if Config.C.Debug == true {
+			Log(cl.res)
+		}
+		
+		if ( cl.errors >= Config.Smtp.Maxerrors ) {
+			killClient(cl,"221 Oh no to many errors")
 		}
 
 		if cl.res != "" {
@@ -452,8 +456,8 @@ func readData(client *Client) (input string, err error) {
 
                 if reply != "" {
                         input = input + reply
-                        if len(input) > cDaemon["MAX_SIZE"] {
-                                err = errors.New("Maximum DATA size exceeded (" + strconv.Itoa(cDaemon["MAX_SIZE"]) + ")")
+                        if len(input) > Config.Smtp.Maxsize {
+                                err = errors.New("Maximum DATA size exceeded (" + strconv.Itoa(Config.Smtp.Maxsize) + ")")
                                 return input, err
                         }
                         if client.subject == "" && (len(reply) > 8) {
@@ -479,9 +483,18 @@ func readData(client *Client) (input string, err error) {
         }
 
 	client.data = input
+	
+	if Plugins["spamc"] == true && ! client.auth {
+		var status bool
 
-	if Config["CHECK_SPAMC"] == "1" && ! client.auth {
-		spam(client)
+		// Plugins : whitelist hacer bucle tipo perl
+		if Plugins["whitelist"] == true {
+			status = WhiteList(client)
+		}
+		
+		if status == false {
+			Spamc(client)
+		}
 	}
 	
 	// FIXME => net/mail : Peta cuando el MailAddress devuelve error
@@ -516,8 +529,8 @@ func readSmtp(client *Client) (input string, err error) {
                 reply, err = client.bufin.ReadString('\n')
                 if reply != "" {
                         input = input + reply
-                        if len(input) > cDaemon["MAX_SIZE"] {
-                                err = errors.New("Maximum DATA size exceeded (" + strconv.Itoa(cDaemon["MAX_SIZE"]) + ")")
+                        if len(input) > Config.Smtp.Maxsize {
+                                err = errors.New("Maximum DATA size exceeded (" + strconv.Itoa(Config.Smtp.Maxsize) + ")")
                                 return input, err
                         }
 		}
@@ -538,14 +551,14 @@ func killClient(cl *Client,msg string) {
 }
 
 func closeClient(cl *Client) {
-	cl.conn.Close()
+	cl.conn.Close()	
         <-sem // Done; enable next client to run.
 }
 
 func greeting(cl *Client) {
 	cl.res =
-		"250-" + Config["HOSTNAME"] + " Uluba-babula, [" + string(cl.addr) + "]" + "\r\n" +
-		"250-SIZE " + strconv.Itoa(cDaemon["MAX_SIZE"]) + "\r\n" +
+		"250-" + Config.C.Host + " Uluba-babula, [" + string(cl.addr) + "]" + "\r\n" +
+		"250-SIZE " + strconv.Itoa(Config.Smtp.Maxsize) + "\r\n" +
 		"250-PIPELINING\r\n" +
 		"250-8BITMIME\r\n"
 
@@ -572,11 +585,17 @@ func WriteData() {
 		
 		add_head := ""
 		add_head += "Delivered-To: " + my_rcpt + "\r\n"
-		add_head += "Received: from " + cl.helo + " (" + cl.helo + "  [" + cl.addr + "])\r\n"
-		add_head += "   by " + Config["HOSTNAME"] + " with SMTP id " + cl.hash + "@" + Config["HOSTNAME"] + ";\r\n"
+		
+		if Config.Queue.Hidereceived == true {
+			add_head += "Received: from localhost\r\n"
+		} else {
+			add_head += "Received: from " + cl.helo + " (" + cl.helo + "  [" + cl.addr + "])\r\n"
+		}
+		
+		add_head += "   by " + Config.C.Host + " with SMTP id " + cl.hash + "@" + Config.C.Host + ";\r\n"
 		add_head += "   " + time.Now().Format(time.RFC1123Z) + "\r\n"
 		
-		cl.headers["X-EMail"] = Config["VERSION"]
+		cl.headers["X-EMail"] = Version
 		
 		for k,v := range cl.headers {
 			add_head += k + ": " + v + "\r\n"
@@ -584,7 +603,7 @@ func WriteData() {
 		
 		cl.data = add_head + cl.mail_con
 		
-		real_dir := Config["MAILDIR"] + domain + "/" + email + "/"
+		real_dir := Config.Queue.Maildir + domain + "/" + email + "/"
 		new_dir,_ := filepath.EvalSymlinks(real_dir)
 		
 		parts := strings.Split(new_dir,"/")
@@ -596,7 +615,7 @@ func WriteData() {
 		// Filters EMail
 		var dir_out string = filterDb(cl,pms_user,pms_domain)
 		
-		var my_file string = Config["MAILDIR"] + domain + "/" + email + "/Maildir/" + dir_out + "new/" +
+		var my_file string = Config.Queue.Maildir + domain + "/" + email + "/Maildir/" + dir_out + "new/" +
 			strconv.FormatInt(cl.clientID, 9) + "_" + cl.hash + ":2,"
 		
 		saveFile(cl,my_file)
@@ -622,8 +641,8 @@ func filterDb(cl *Client,pms_user string,pms_domain string) (dir_out string) {
 		}
 
 		if method == "from" && strings.ToUpper(cl.headers["From"]) == strings.ToUpper(value) {
-			if Config["DEBUG"] == "1" {
-				fmt.Printf("Filter DB: %s %s %s %s\n",method,method_arg,value,out)
+			if Config.C.Debug == true {
+				//Log(fmt.Printf("Filter DB: %s %s %s %s\n",method,method_arg,value,out))
 			}
 				dir_out = out + "/"
 			return
@@ -640,8 +659,8 @@ func filterDb(cl *Client,pms_user string,pms_domain string) (dir_out string) {
 // Si no se puede guardar que notifique el problema RFC
 func saveFile(cl *Client,my_file string) {
 	
-	if Config["DEBUG"] == "1" {
-		log.Print(my_file)
+	if Config.C.Debug == true {
+		Log(my_file)
 	}
 	
 	file, err := os.Create(my_file)
@@ -662,7 +681,7 @@ func RelayMail() {
 	for {
 		cl := <-RelayMailChan
 		
-		c, err := smtp.Dial(Config["SMTP_RELAY"])
+		c, err := smtp.Dial(Config.C.Relay)
 		
 		if err != nil {
 			log.Println(err)
@@ -675,13 +694,12 @@ func RelayMail() {
 
 		// Send the email body
 		wc, err := c.Data()
+		//defer wc.Close()
 		
 		if err != nil {
 			log.Println(err)
 			cl.relayNotify <- 500
 		}
-		
-		//defer wc.Close()
 		
 		buf := bytes.NewBufferString(cl.data)
 		

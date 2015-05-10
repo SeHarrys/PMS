@@ -5,12 +5,12 @@ import (
         "crypto/md5"
 	"encoding/base64"
         "encoding/hex"
-	"errors"
 	"io/ioutil"
 	"time"
 	"os"
 	"net/mail"
 	"log"
+	"fmt"
 	"regexp"
 	"strings"
 	_"github.com/go-sql-driver/mysql"
@@ -19,9 +19,13 @@ import (
 )
 
 func rcpt_to(cl *Client,rcpt_to string) {
+	cl.rcpts_count++
+	cl.status = 0
+
 	_,err := mail.ParseAddress(rcpt_to)
 	if err != nil {
-		cl.res = "501 could not parse your mail from command"
+		cl.res = "501 5.1.3 could not parse your mail from command"
+		cl.errors++
 		return
 	}
 
@@ -32,7 +36,7 @@ func rcpt_to(cl *Client,rcpt_to string) {
         s := strings.Split(rcpt_to, "@")
 
 	if len(s) < 2 {
-		cl.state = DENY_USER
+		cl.status = DENY_USER
 		return
 	}
 	
@@ -43,71 +47,34 @@ func rcpt_to(cl *Client,rcpt_to string) {
 
         cl.domain = strings.Replace(cl.domain, "\n", "", -1)
 
-	cl.status = 0
-	
 	// Checks Domains valid RCPT && User
         if ! allowedHosts[cl.domain] && cl.auth == false {
-		cl.state = DENY_USER
+		cl.status = DENY_USER
 		return
         } else if ! allowedHosts[cl.domain] && cl.auth == true {
-		cl.rcpt_to = rcpt_to
-		cl.relay  = true
-		cl.status = 1
+		cl.rcpts[rcpt_to] = "relay"
+		cl.status = 3
                 return
         } else 	if ! validUser(cl.user) {
-		cl.state = DENY_USER
+		cl.status = DENY_USER
 		return
 	}
 	
-	rcpt_path := Config["MAILDIR"]+cl.domain+"/"+cl.user
+	rcpt_path := Config.Queue.Maildir + cl.domain + "/" + cl.user
 
         _, err = os.Open(rcpt_path)
         if err != nil {
-		cl.state = DENY_USER
-        } else {
-		cl.status = 1
+		cl.status = DENY_USER
+		return
+        }
 
-		if len(cl.rcpt_to) > 0 {
-			cl.rcpt_to = cl.rcpt_to + "," + rcpt_to
-		} else {
-			cl.rcpt_to = rcpt_to
-		}
-		
+	if cl.rcpts[rcpt_to] != "" {
+		cl.status = 2
+	} else {
+		cl.status = 1
+		cl.rcpts[rcpt_to] = "mail"
 	}
 	
-}
-
-func validateEmailData(client *Client) (user string, host string, addr_err error) {
-        if user, host, addr_err = extractEmail(client.mail_from); addr_err != nil {
-                return user, host, addr_err
-        }
-        client.mail_from = user + "@" + host
-        if user, host, addr_err = extractEmail(client.rcpt_to); addr_err != nil {
-                return user, host, addr_err
-        }
-        client.rcpt_to = user + "@" + host
-        // check if on allowed hosts
-        if allowed := allowedHosts[host]; !allowed {
-                return user, host, errors.New("invalid host:" + host)
-        }
-        return user, host, addr_err
-}
-
-func extractEmail(str string) (name string, host string, err error) {
-        re, _ := regexp.Compile(`<(.+?)@(.+?)>`) // go home regex, you're drunk!
-        if matched := re.FindStringSubmatch(str); len(matched) > 2 {
-                host = validHost(matched[2])
-                name = matched[1]
-        } else {
-                if res := strings.Split(str, "@"); len(res) > 1 {
-                        name = res[0]
-                        host = validHost(res[1])
-                }
-        }
-        if host == "" || name == "" {
-                err = errors.New("Invalid address, [" + name + "@" + host + "] address:" + str)
-        }
-        return name, host, err
 }
 
 func validHost(host string) string {
@@ -229,27 +196,31 @@ func banHost(host string) {
 
 	if bannedHosts[s[0]] == 0 {
 		bannedHosts[s[0]] = 1
-	} else if ( bannedHosts[s[0]] == cDaemon["BAN_LIMIT"] - 1 ) {
-		bannedHosts[s[0]] = int(time.Now().Unix()) + cDaemon["BAN_TIME"]
+	} else if ( bannedHosts[s[0]] == Config.Smtp.Banlimit ) {
+		bannedHosts[s[0]] = int(time.Now().Unix()) + Config.Smtp.Bantime
 	} else {
 		bannedHosts[s[0]] = bannedHosts[s[0]] + 1
 	}
 	
-	log.Printf("Banned: %s - %d",s[0],bannedHosts[s[0]])
+	fmt.Printf("Banned: %s - %d \n",s[0],bannedHosts[s[0]])
 }
 
 func ValidsRCPT() {
         rows, err := db.Query("SELECT dominio FROM domains WHERE estado = 1")
 	
 	if err != nil { log.Fatalln(err) }
+
+	for domain := range allowedHosts {
+		delete(allowedHosts, domain)
+	}
 	
 	for rows.Next() {
 		var domain string
-		
+
 		if err := rows.Scan(&domain); err != nil {
 			log.Fatal(err)
 		}
-		allowedHosts[domain] = true
+		allowedHosts[domain] = true		
 	}
 	
 	if err := rows.Err(); err != nil {
