@@ -287,6 +287,10 @@ func Parser(cl *Client) {
 				case strings.Index(auth_method,"CRAM-MD5") == 0:
 					AuthMD5(cl)
 				case strings.Index(auth_method,"PLAIN") == 0:
+					if ! cl.tls_on {
+						cl.res = "502 Auth PLAIN require STARTTLS"
+						break;
+					}
 					if strings.Index(auth_method,"PLAIN ") == 0 {
 						auth_b64 := input[11:]
 						AuthPlain(cl,auth_b64)

@@ -21,6 +21,9 @@ type Cfg struct {
 	Queue struct {
 		Maildir string
 		Hidereceived bool
+		Sgid int
+		Guid int
+		Symlinks bool
 	}
 	Db struct {
 		User string
