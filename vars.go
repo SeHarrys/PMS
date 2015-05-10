@@ -35,6 +35,9 @@ type Cfg struct {
 		Name string
 		Host string
 	}
+	Checks struct {
+		Timer int
+	}
 	C struct {
 		Debug bool
 		Relay string

@@ -193,9 +193,9 @@ func main() {
 
 func Checks() {
 	for {
-		fmt.Printf("Sesiones Abiertas: %d\n",clientID);
+		time.Sleep(30 * time.Minute)
 		
-		time.Sleep(1800 * time.Second)
+		fmt.Printf("Sesiones Abiertas: %d\n",clientID);
 
 		for k,v := range bannedHosts {
 			if v > Config.Smtp.Banlimit && int(time.Now().Unix()) > v {
@@ -204,7 +204,7 @@ func Checks() {
 			}
 		}
 
-		// Generamos stats Monitorix
+		// Generar stats: Monitorix
 		
 		ValidsRCPT()
 	}
