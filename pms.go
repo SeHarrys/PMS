@@ -204,6 +204,8 @@ func Checks() {
 			}
 		}
 
+		// Generamos stats Monitorix
+		
 		ValidsRCPT()
 	}
 }
@@ -237,8 +239,8 @@ func Parser(cl *Client) {
 			killClient(cl,"521 You are banned")
 		}
 		
-		if counter_cmd >= 3 {
-			killClient(cl,"521 Closing connection. 4 unrecognized commands")
+		if counter_cmd >= Config.Smtp.Counter {
+			killClient(cl,"521 Closing connection. max unrecognized commands")
 		}
 
 		switch cl.state {
@@ -516,7 +518,9 @@ func readData(client *Client) (input string, err error) {
 
         body, err := ioutil.ReadAll(my_msg.Body)
         if err != nil {
-                log.Fatal("Body error")
+                Log("Body error " + strconv.FormatInt(client.clientID,9) )
+		killClient(client,"500 Failed parsing message")
+		return
 	}
 
 	client.mail_con = string(body)

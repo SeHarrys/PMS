@@ -17,6 +17,7 @@ type Cfg struct {
 		Maxerrors int
 		Banlimit int
 		Bantime int
+		Counter int
 	}
 	Queue struct {
 		Maildir string
@@ -24,6 +25,9 @@ type Cfg struct {
 		Sgid int
 		Guid int
 		Symlinks bool
+	}
+	Redis struct {
+		Server string
 	}
 	Db struct {
 		User string
