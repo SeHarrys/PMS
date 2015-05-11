@@ -102,11 +102,14 @@ func main() {
 	}
 
 	// SET Plugins
-	plgns := strings.Split(Config.C.Plugs,":")
-	for plg := range plgns {
+	if Config.C.Plugins != "" {
+		plgns := strings.Split(Config.C.Plugins,":")
+		for plg := range plgns {
 		Plugins[plgns[plg]] = true
+			Log("[OK] Plugins : " + plgns[plg])
+		}
 	}
-
+	
 	// Enabled TLS
 	if Config.Daemon.Tls == true {
 		cert, err := tls.LoadX509KeyPair("./pms-cert.pem", "./pms-cert.key")
@@ -594,7 +597,7 @@ func WriteData() {
 		add_head := ""
 		add_head += "Delivered-To: " + my_rcpt + "\r\n"
 		
-		if Config.Queue.Hidereceived == true {
+		if Config.Queue.Hidereceived == true && cl.auth == true {
 			add_head += "Received: from localhost\r\n"
 		} else {
 			add_head += "Received: from " + cl.helo + " (" + cl.helo + "  [" + cl.addr + "])\r\n"

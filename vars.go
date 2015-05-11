@@ -43,7 +43,7 @@ type Cfg struct {
 		Relay string
 		Host string
 		Logfile string
-		Plugs string
+		Plugins string
 	}
 }
 
