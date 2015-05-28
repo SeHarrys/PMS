@@ -63,7 +63,7 @@ const (
 	CL_RELAY     = 2
 )
 
-func Log(msg string) {
+func Log(cID int64,msg string) {
 
 	if Config.C.Logfile != "" {
 		fd, err := os.OpenFile(Config.C.Logfile, os.O_RDWR | os.O_CREATE | os.O_APPEND, 0666)
@@ -76,5 +76,5 @@ func Log(msg string) {
 		log.SetOutput(fd)
 	}
 
-	log.Println(msg)
+	log.Printf("%d > %s\n",cID,msg)
 }

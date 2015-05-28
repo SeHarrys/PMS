@@ -29,9 +29,9 @@ func AuthPlain(cl *Client,auth_b64 string) {
 	
 	// El 1 elemento es null
         login := strings.Split(arr[1], "@")
-
+	
 	// login && passwd no vacios
-        if validHost(login[1]) == "" { //|| len(arr) < 3 {
+        if len(arr) != 2 {
 		AuthFail(cl,"PLAIN Authentication failed")
 		return
         }
@@ -81,6 +81,11 @@ func AuthMD5(cl *Client) {
 	arr := strings.Split(fromBase64(input), " ")
 	login := strings.Split(arr[0],"@")
 
+	if len(login) != 2 {
+		AuthFail(cl,"CRAM-MD5 Authentication failed")
+		return
+	}
+	
 	var pw_clear_passwd string
 
 	sqlerr := db.QueryRow("SELECT pw_clear_passwd FROM control WHERE pw_name = ? AND pw_domain = ? LIMIT 1", login[0],login[1]).Scan(&pw_clear_passwd)

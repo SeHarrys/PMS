@@ -49,8 +49,6 @@ type Client struct {
         data        string
         subject     string
         hash        string
-	domain      string
-	user        string
 	headers     map[string]string // Email headers
         time        int64
         conn        net.Conn
@@ -68,7 +66,7 @@ var TLSconfig *tls.Config
 
 var db *sql.DB                    // Global mysql DB
 var timeout time.Duration
-var allowedHosts = make(map[string]bool)
+var allowedHosts = make(map[string]int)
 var bannedHosts = make(map[string]int)
 var Plugins = make(map[string]bool)
 
@@ -106,7 +104,7 @@ func main() {
 		plgns := strings.Split(Config.C.Plugins,":")
 		for plg := range plgns {
 		Plugins[plgns[plg]] = true
-			Log("[OK] Plugins : " + plgns[plg])
+			Log(0,"[OK] Plugin: " + plgns[plg])
 		}
 	}
 	
@@ -161,7 +159,7 @@ func main() {
 	if err != nil {
 		log.Fatalln("Error Listen :", err.Error())
 	} else {
-		Log("Listen: " + Config.Daemon.Listen)
+		Log(0,"Listen: " + Config.Daemon.Listen)
 	}
 
 	clientID = 1
@@ -217,11 +215,11 @@ func Parser(cl *Client) {
         defer closeClient(cl)
 
 	if Config.C.Debug == true {
-		Log("Incoming: "+cl.addr)
+		Log(cl.clientID,"Incoming: "+cl.addr)
 	}
 	
 	if Plugins["earlytalk"] == true {
-		if EarlyCheck := EarlyTalker(cl); EarlyCheck == 0 {
+		if EarlyCheck := EarlyTalker(cl); EarlyCheck == false {
 			cl.res = "550 Connecting host started transmitting before SMTP greeting\r\n"
 			cl.conn.Write([]byte(string(cl.res)))
 			return
@@ -263,6 +261,7 @@ func Parser(cl *Client) {
                         //input = strings.Trim(input, " \n\r")
                         cmd := strings.ToUpper(input)
 			switch {
+			// Oops
 			case strings.Index(cmd, "EHLO") == 0,strings.Index(cmd, "HELO") == 0:
 				if len(input) > 5 {
                                         cl.helo = input[5:]
@@ -315,14 +314,20 @@ func Parser(cl *Client) {
 					cl.res = "504 5.5.1 Undefinied authentication method"
 					cl.errors++
 				}
+				// Parse Mail From options
 			case strings.Index(cmd, "MAIL FROM:") == 0:
 				if len(cmd) > 10 {
-					_,err = mail.ParseAddress(cmd[10:])
+					mycmd := cmd[10:]
+					arr   := strings.Fields(mycmd)
+					for k := range arr {
+						fmt.Println(arr[k])
+					}
+					_,err = mail.ParseAddress(arr[0])
 					if err != nil {
 						cl.res = "501 could not parse your mail from command"
 						break
 					}
-					cl.mail_from = cmd[10:]
+					cl.mail_from = arr[0]
 				}
 				cl.res = "250 2.1.0 OK " +strconv.FormatInt(cl.clientID, 9)
 			case strings.Index(cmd, "RCPT TO:") == 0:
@@ -345,12 +350,19 @@ func Parser(cl *Client) {
 					cl.res = "250 2.1.5 OK " +strconv.FormatInt(cl.clientID, 9)+ " but rcpt_to is repeat"
 				} else if cl.status == 3 {
 					cl.res = "250 2.1.5 OK " +strconv.FormatInt(cl.clientID, 9)+ " relay"
+				} else if cl.status == 4 {
+					cl.res = "554 5.7.1 Authentication first, omitted"
+					cl.errors++
 				} else {
-					Log("RCPT TO: "+cmd[8:])
 					cl.res = "550 5.1.1 The user does not exist"
 					cl.errors++
 				}
-
+			case strings.Index(cmd, "RSET") == 0:
+				for rcpt := range cl.rcpts {
+					delete(cl.rcpts, rcpt)
+				}
+				cl.mail_from = ""
+				cl.res = "250 2.0.0 OK"
 			case strings.Index(cmd, "QUIT") == 0:
 				killClient(cl,"221 2.0.0 " + Config.C.Host + " closing connection.")
 			default:
@@ -433,7 +445,7 @@ func Parser(cl *Client) {
 		}
 
 		if Config.C.Debug == true {
-			Log(cl.res)
+			Log(cl.clientID,cl.res)
 		}
 		
 		if ( cl.errors >= Config.Smtp.Maxerrors ) {
@@ -450,6 +462,9 @@ func Parser(cl *Client) {
 			return
 		}
 	}
+	
+	cl.res = "221 Oh no to many commands\r\n"
+	cl.conn.Write([]byte(string(cl.res)))
 }
 
 // FIXME **
@@ -492,7 +507,7 @@ func readData(client *Client) (input string, err error) {
         }
 
 	client.data = input
-	
+
 	if Plugins["spamc"] == true && ! client.auth {
 		var status bool
 
@@ -521,13 +536,17 @@ func readData(client *Client) (input string, err error) {
 
         body, err := ioutil.ReadAll(my_msg.Body)
         if err != nil {
-                Log("Body error " + strconv.FormatInt(client.clientID,9) )
+                Log(client.clientID,"Body error " + strconv.FormatInt(client.clientID,9) )
 		killClient(client,"500 Failed parsing message")
 		return
 	}
 
 	client.mail_con = string(body)
 
+	if Config.C.Debug {
+		Log(client.clientID,input)
+	}
+	
         return input, err
 }
 
@@ -552,6 +571,8 @@ func readSmtp(client *Client) (input string, err error) {
 
 	input = strings.Trim(input, " \n\r")
 
+	Log(client.clientID,input)
+	
         return input, err
 }
 
@@ -562,7 +583,10 @@ func killClient(cl *Client,msg string) {
 }
 
 func closeClient(cl *Client) {
-	cl.conn.Close()	
+	cl.conn.Close()
+	if Config.C.Debug {
+		Log(cl.clientID,"Closed " + cl.addr)
+	}
         <-sem // Done; enable next client to run.
 }
 
@@ -588,14 +612,10 @@ func WriteData() {
 		cl.subject = mimeHeaderDecode(cl.subject)
 		cl.hash = md5hex(cl.mail_from + cl.subject + strconv.FormatInt(time.Now().UnixNano(), 10))
 
-		if cl.user == cl.mail_from && ! cl.auth { cl.savedNotify <- -1 }
-
-		my_rcpt := cl.my_rcpt
-		s := strings.Split(my_rcpt, "@")
-		email, domain := strings.ToLower(s[0]),strings.ToLower(s[1])
+		email, domain := getMail(cl.my_rcpt)
 		
 		add_head := ""
-		add_head += "Delivered-To: " + my_rcpt + "\r\n"
+		add_head += "Delivered-To: " + cl.my_rcpt + "\r\n"
 		
 		if Config.Queue.Hidereceived == true && cl.auth == true {
 			add_head += "Received: from localhost\r\n"
@@ -619,12 +639,16 @@ func WriteData() {
 		
 		parts := strings.Split(new_dir,"/")
 		leng  := len(parts)
-		
+
 		pms_user := parts[leng - 1]
 		pms_domain := parts[leng - 2]
 		
 		// Filters EMail
-		var dir_out string = filterDb(cl,pms_user,pms_domain)
+		var dir_out string = ""
+
+		if Plugins["filterdb"] == true {
+			dir_out = filterDb(cl,pms_user,pms_domain)
+		}
 		
 		var my_file string = Config.Queue.Maildir + domain + "/" + email + "/Maildir/" + dir_out + "new/" +
 			strconv.FormatInt(cl.clientID, 9) + "_" + cl.hash + ":2,"
@@ -635,43 +659,10 @@ func WriteData() {
 	}
 }
 
-func filterDb(cl *Client,pms_user string,pms_domain string) (dir_out string) {
-	dir_out = ""
-	
-	rows, err := db.Query("SELECT f.method,f.method_arg,f.value,f.out FROM control c LEFT JOIN filters f ON f.control = c.id WHERE c.pw_name = ? AND c.pw_domain = ?",pms_user,pms_domain)
-
-	if err != nil {
-		return
-	}
-
-	for rows.Next() {
-		var method, method_arg, out, value string
-
-		if err := rows.Scan(&method,&method_arg,&value,&out); err != nil {
-			return
-		}
-
-		if method == "from" && strings.ToUpper(cl.headers["From"]) == strings.ToUpper(value) {
-			if Config.C.Debug == true {
-				//Log(fmt.Printf("Filter DB: %s %s %s %s\n",method,method_arg,value,out))
-			}
-				dir_out = out + "/"
-			return
-		}
-	}
-
-	if err := rows.Err(); err != nil {
-		return
-	}
-	
-	return
-}
-
-// Si no se puede guardar que notifique el problema RFC
 func saveFile(cl *Client,my_file string) {
 	
 	if Config.C.Debug == true {
-		Log(my_file)
+		Log(cl.clientID,my_file)
 	}
 	
 	file, err := os.Create(my_file)

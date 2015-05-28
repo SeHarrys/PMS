@@ -10,13 +10,27 @@ import (
 	"os"
 	"net/mail"
 	"log"
-	"fmt"
 	"regexp"
 	"strings"
 	_"github.com/go-sql-driver/mysql"
 	"github.com/sloonz/go-iconv"
 	"github.com/sloonz/go-qprintable"
 )
+
+func getMail(email string) (user string, domain string) {
+	email = strings.Trim(email," \n\r")
+	email = strings.Replace(email, "<", "", -1)
+	email = strings.Replace(email, ">", "", -1)
+
+	s := strings.Split(email, "@")
+
+	user = strings.ToLower(s[0])
+	domain = strings.ToLower(s[1])
+
+	domain = strings.Replace(domain, "\n", "", -1)
+	
+	return
+}
 
 func rcpt_to(cl *Client,rcpt_to string) {
 	cl.rcpts_count++
@@ -29,38 +43,29 @@ func rcpt_to(cl *Client,rcpt_to string) {
 		return
 	}
 
-	rcpt_to = strings.Trim(rcpt_to," \n\r")
-	rcpt_to = strings.Replace(rcpt_to, "<", "", -1)
-	rcpt_to = strings.Replace(rcpt_to, ">", "", -1)
-	
-        s := strings.Split(rcpt_to, "@")
-
-	if len(s) < 2 {
-		cl.status = DENY_USER
+	if rcpt_to == cl.mail_from && ! cl.auth {
+		cl.status = 4
 		return
 	}
-	
-        email, domain := s[0], s[1]
 
-	cl.domain = strings.ToLower(domain)
-	cl.user   = strings.ToLower(email)
+        user, domain := getMail(rcpt_to)
 
-        cl.domain = strings.Replace(cl.domain, "\n", "", -1)
-
-	// Checks Domains valid RCPT && User
-        if ! allowedHosts[cl.domain] && cl.auth == false {
+        if _,ok := allowedHosts[domain]; ! ok && cl.auth == false {
 		cl.status = DENY_USER
 		return
-        } else if ! allowedHosts[cl.domain] && cl.auth == true {
+        } else if _,ok := allowedHosts[domain]; ! ok && cl.auth == true {
 		cl.rcpts[rcpt_to] = "relay"
 		cl.status = 3
                 return
-        } else 	if ! validUser(cl.user) {
+	} else if allowedHosts[domain] == 3 {
+		user = "all"
+		rcpt_to = user + "@" + domain
+        } else if ! validUser(user) {
 		cl.status = DENY_USER
 		return
 	}
 	
-	rcpt_path := Config.Queue.Maildir + cl.domain + "/" + cl.user
+	rcpt_path := Config.Queue.Maildir + domain + "/" + user
 
         _, err = os.Open(rcpt_path)
         if err != nil {
@@ -194,19 +199,16 @@ func fixCharset(charset string) string {
 func banHost(host string) {
 	s := strings.Split(host, ":")
 
-	if bannedHosts[s[0]] == 0 {
-		bannedHosts[s[0]] = 1
-	} else if ( bannedHosts[s[0]] == Config.Smtp.Banlimit ) {
+	if ( bannedHosts[s[0]] == Config.Smtp.Banlimit ) {
 		bannedHosts[s[0]] = int(time.Now().Unix()) + Config.Smtp.Bantime
 	} else {
 		bannedHosts[s[0]] = bannedHosts[s[0]] + 1
 	}
-	
-	fmt.Printf("Banned: %s - %d \n",s[0],bannedHosts[s[0]])
+
 }
 
 func ValidsRCPT() {
-        rows, err := db.Query("SELECT dominio FROM domains WHERE estado = 1")
+        rows, err := db.Query("SELECT dominio,tipo FROM domains WHERE estado = 1")
 	
 	if err != nil { log.Fatalln(err) }
 
@@ -216,11 +218,12 @@ func ValidsRCPT() {
 	
 	for rows.Next() {
 		var domain string
-
-		if err := rows.Scan(&domain); err != nil {
+		var tipo int
+		
+		if err := rows.Scan(&domain,&tipo); err != nil {
 			log.Fatal(err)
 		}
-		allowedHosts[domain] = true		
+		allowedHosts[domain] = tipo	
 	}
 	
 	if err := rows.Err(); err != nil {

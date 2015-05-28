@@ -1,0 +1,8 @@
+  handleSignals : ./server/camlistored/camlistored.go ( Restart process )
+  Estructura basica para el Maildir : https://github.com/luksen/maildir/blob/master/maildir.go
+
+Tipo de conexiones:
+
+normal -
+inmune - No pasa filtros de spam , etc..
+banned -
