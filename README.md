@@ -11,6 +11,9 @@
 
 ```shell
 go get github.com/SeHarrys/PMS
+export GOPATH=`pwd`
+export PATH=$PATH:$GOPATH/bin
+go build pms.go
 ```
 
   AllowedHost type :
