@@ -12,28 +12,30 @@ type Cfg struct {
 		Timeout int
 	}
 	Smtp struct {
-		Maxsize int
-		Maxrcpts int
+		Maxsize   int
+		Maxrcpts  int
 		Maxerrors int
-		Banlimit int
-		Bantime int
-		Counter int
+		Banlimit  int
+		Bantime   int
+		Counter   int
+		Authmethods string
 	}
 	Queue struct {
-		Maildir string
+		Maildir      string
 		Hidereceived bool
-		Sgid int
-		Guid int
-		Symlinks bool
+		Sgid         int
+		Guid         int
+		Symlinks     bool
 	}
 	Redis struct {
 		Server string
 	}
 	Db struct {
-		User string
-		Pass string
-		Name string
-		Host string
+		Driver string
+		User   string
+		Pass   string
+		Name   string
+		Host   string
 	}
 	Checks struct {
 		Timer int

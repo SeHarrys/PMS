@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
-        "crypto/md5"
+	"io"
+	"crypto/sha1"
+	"crypto/md5"
 	"crypto/hmac"
 	"database/sql"
 	"fmt"
@@ -15,10 +17,10 @@ import (
 func AuthFail(cl *Client,msg string) {
 	cl.res = "535 " + msg
 	//cl.kill_time = time.Now().Unix()
-	banHost(cl.addr)	
+	banHost(cl.addr)
 }
 
-// TODO: Checks or remove
+// Auth PLAIN only via TLS
 func AuthPlain(cl *Client,auth_b64 string) {
 	arr := nullTermToStrings([]byte(fromBase64(auth_b64)))
 
@@ -26,15 +28,19 @@ func AuthPlain(cl *Client,auth_b64 string) {
 		AuthFail(cl,"PLAIN Authentication failed")
 		return
 	}
-	
+
 	// El 1 elemento es null
         login := strings.Split(arr[1], "@")
 	
 	// login && passwd no vacios
-        if len(arr) != 2 {
+        if len(login) != 2 {
 		AuthFail(cl,"PLAIN Authentication failed")
 		return
         }
+
+	h := sha1.New()
+	io.WriteString(h,arr[2])
+	arr[2] = fmt.Sprintf("%x", h.Sum(nil))
 	
 	var (
 		id int
@@ -43,7 +49,8 @@ func AuthPlain(cl *Client,auth_b64 string) {
 		pw_passwd string
 	)
 
-	sqlerr := db.QueryRow("SELECT id,pw_passwd,pw_dir,status FROM control WHERE pw_name = ? AND pw_domain = ? AND pw_clear_passwd = ? LIMIT 1", login[0],login[1],arr[2]).Scan(&id,&pw_passwd,&pw_dir,&status)
+	sqlerr := db.QueryRow("SELECT id,pw_passwd,pw_dir,status FROM control WHERE pw_name = ? AND pw_domain = ? AND pw_passwd = ? LIMIT 1",
+		              login[0],login[1],arr[2]).Scan(&id,&pw_passwd,&pw_dir,&status)
 
 	switch {
 	case sqlerr == sql.ErrNoRows:
@@ -58,15 +65,17 @@ func AuthPlain(cl *Client,auth_b64 string) {
                 cl.auth = true
 		cl.state = 1
 	}
-
+	
 }
 
+// Auth CRAM-MD5
+// Como generamos la semilla en cada transaccion se usa pw_clear_passwd para tener el passwd
 func AuthMD5(cl *Client) {
 	str := toBase64(fmt.Sprintf("<%x.%x@%s>", cl.hash , time.Now().Unix(), Config.C.Host))
 
         cl.res = "334 " + str + "\r\n"
         cl.conn.Write([]byte(string(cl.res)))
-	
+
         my_buf := make([]byte, RECV_BUF_LEN)
         _, err := cl.conn.Read(my_buf)
         if err != nil {
@@ -75,7 +84,7 @@ func AuthMD5(cl *Client) {
         }
 
 	input := string(bytes.Trim(my_buf, "\x00"))
-	
+
 	input = strings.Replace(input,"\r\n","",-1)
 
 	arr := strings.Split(fromBase64(input), " ")
@@ -85,20 +94,20 @@ func AuthMD5(cl *Client) {
 		AuthFail(cl,"CRAM-MD5 Authentication failed")
 		return
 	}
-	
+
 	var pw_clear_passwd string
 
 	sqlerr := db.QueryRow("SELECT pw_clear_passwd FROM control WHERE pw_name = ? AND pw_domain = ? LIMIT 1", login[0],login[1]).Scan(&pw_clear_passwd)
-	
+
         switch {
 	case sqlerr == sql.ErrNoRows:
-                AuthFail(cl,"CRAM-MD5 Authentication failed")		
+                AuthFail(cl,"CRAM-MD5 Authentication failed")
 		return
 	case sqlerr != nil:
                 AuthFail(cl,"CRAM-MD5 Authentication failed")
 		return
         }
-
+	
 	d := hmac.New(md5.New, []byte(pw_clear_passwd))
 	d.Write([]byte(fromBase64(str)))
 	s := make([]byte, 0, d.Size())
@@ -110,10 +119,16 @@ func AuthMD5(cl *Client) {
 		cl.auth = true
 		cl.state = 1
 	} else {
-                AuthFail(cl,"CRAM-MD5 Authentication failed for:"+arr[0])		
-	}
-	
+		AuthFail(cl,"CRAM-MD5 Authentication failed for:"+arr[0])
+	}	
 }
+
+// Auth DIGEST-MD5
+func AuthDigestMD5 (cl *Client,b64 string) {
+
+}
+
+// Auth GSSAPI
 
 func nullTermToStrings(b []byte) (s []string) {
 	for _, x := range bytes.Split(b, []byte{0}) {

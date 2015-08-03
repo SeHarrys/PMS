@@ -1,10 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"bytes"
-        "crypto/md5"
+	"crypto/md5"
 	"encoding/base64"
-        "encoding/hex"
+	"encoding/hex"
 	"io/ioutil"
 	"time"
 	"os"
@@ -28,7 +29,7 @@ func getMail(email string) (user string, domain string) {
 	domain = strings.ToLower(s[1])
 
 	domain = strings.Replace(domain, "\n", "", -1)
-	
+
 	return
 }
 
@@ -48,15 +49,15 @@ func rcpt_to(cl *Client,rcpt_to string) {
 		return
 	}
 
-        user, domain := getMail(rcpt_to)
-
-        if _,ok := allowedHosts[domain]; ! ok && cl.auth == false {
+	user, domain := getMail(rcpt_to)
+	
+	if _,ok := allowedHosts[domain]; ! ok && cl.auth == false {
 		cl.status = DENY_USER
 		return
-        } else if _,ok := allowedHosts[domain]; ! ok && cl.auth == true {
+	} else if _,ok := allowedHosts[domain]; ! ok && cl.auth == true {
 		cl.rcpts[rcpt_to] = "relay"
 		cl.status = 3
-                return
+		return
 	} else if allowedHosts[domain] == 3 {
 		user = "all"
 		rcpt_to = user + "@" + domain
@@ -64,7 +65,7 @@ func rcpt_to(cl *Client,rcpt_to string) {
 		cl.status = DENY_USER
 		return
 	}
-	
+
 	rcpt_path := Config.Queue.Maildir + domain + "/" + user
 
         _, err = os.Open(rcpt_path)
@@ -79,7 +80,7 @@ func rcpt_to(cl *Client,rcpt_to string) {
 		cl.status = 1
 		cl.rcpts[rcpt_to] = "mail"
 	}
-	
+
 }
 
 func validHost(host string) string {
@@ -92,7 +93,8 @@ func validHost(host string) string {
 }
 
 func validUser(user string) (bool) {
-        re, _ := regexp.Compile(`^\w+$`)
+        re, _ := regexp.Compile(`^\w+|\-|\.$`)
+	fmt.Println(user)
 	if re.MatchString(user) {
 		return true
 	}
@@ -209,23 +211,23 @@ func banHost(host string) {
 
 func ValidsRCPT() {
         rows, err := db.Query("SELECT dominio,tipo FROM domains WHERE estado = 1")
-	
+
 	if err != nil { log.Fatalln(err) }
 
 	for domain := range allowedHosts {
 		delete(allowedHosts, domain)
 	}
-	
+
 	for rows.Next() {
 		var domain string
 		var tipo int
-		
+
 		if err := rows.Scan(&domain,&tipo); err != nil {
 			log.Fatal(err)
 		}
-		allowedHosts[domain] = tipo	
+		allowedHosts[domain] = tipo
 	}
-	
+
 	if err := rows.Err(); err != nil {
 		log.Fatalln(err)
 	}
