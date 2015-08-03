@@ -13,10 +13,10 @@
 go get github.com/SeHarrys/PMS
 export GOPATH=`pwd`
 export PATH=$PATH:$GOPATH/bin
-go build pms.go
+go build
 ```
 
-  AllowedHost type :
+### AllowedHost type
 
   1 : normal
   2 : mirror domain
