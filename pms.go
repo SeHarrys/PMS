@@ -68,6 +68,7 @@ var db *sql.DB                    // Global mysql DB
 var timeout time.Duration
 var allowedHosts = make(map[string]int)
 var bannedHosts = make(map[string]int)
+var AuthMethods = make(map[string]bool)
 var Plugins = make(map[string]bool)
 
 var clientID int64
@@ -75,7 +76,8 @@ var sem chan int                  // currently active clients
 
 var WriteMailChan chan *Client    // Channel WriteMail
 var RelayMailChan chan *Client    // Channel RelayMail
-var Version = "PMS 001"
+
+var Version = "PMS 002"
 var Config Cfg
 
 type Daemon struct {
@@ -97,6 +99,15 @@ func main() {
 
 	if err != nil {
 		fmt.Printf("%v",err)
+	}
+
+	// SET Auth Methods
+	if Config.Smtp.Authmethods != "" {
+		authm := strings.Split(Config.Smtp.Authmethods,":")
+		for auth  := range authm {
+			AuthMethods[authm[auth]] = true
+			Log(0,"[OK] Auth method: " + authm[auth])
+		}
 	}
 
 	// SET Plugins
@@ -205,8 +216,7 @@ func Checks() {
 			}
 		}
 
-		// Generar stats: Monitorix
-		
+		// Generar stats: Monitorix		
 		ValidsRCPT()
 	}
 }
@@ -261,7 +271,9 @@ func Parser(cl *Client) {
                         //input = strings.Trim(input, " \n\r")
                         cmd := strings.ToUpper(input)
 			switch {
-			// Oops
+			case strings.Index(cmd, "VRFY") == 0:
+				cl.res = "252 2.1.5 I like send emails and bananas."
+				// Oops
 			case strings.Index(cmd, "EHLO") == 0,strings.Index(cmd, "HELO") == 0:
 				if len(input) > 5 {
                                         cl.helo = input[5:]
@@ -288,9 +300,9 @@ func Parser(cl *Client) {
 				//Auth(cl,auth_method)
 				auth_method := input[5:]
 				switch { 
-				case strings.Index(auth_method,"CRAM-MD5") == 0:
+				case AuthMethods["CRAM-MD5"] == true, strings.Index(auth_method,"CRAM-MD5") == 0:
 					AuthMD5(cl)
-				case strings.Index(auth_method,"PLAIN") == 0:
+				case AuthMethods["PLAIN"] == true, strings.Index(auth_method,"PLAIN") == 0:
 					if ! cl.tls_on {
 						cl.res = "502 Auth PLAIN require STARTTLS"
 						break;
@@ -319,9 +331,9 @@ func Parser(cl *Client) {
 				if len(cmd) > 10 {
 					mycmd := cmd[10:]
 					arr   := strings.Fields(mycmd)
-					for k := range arr {
-						fmt.Println(arr[k])
-					}
+					//for k := range arr {
+					//	fmt.Println(arr[k])
+					//}
 					_,err = mail.ParseAddress(arr[0])
 					if err != nil {
 						cl.res = "501 could not parse your mail from command"
@@ -329,7 +341,7 @@ func Parser(cl *Client) {
 					}
 					cl.mail_from = arr[0]
 				}
-				cl.res = "250 2.1.0 OK " +strconv.FormatInt(cl.clientID, 9)
+				cl.res = "250 2.1.0 OK " + strconv.FormatInt(cl.clientID, 9)
 			case strings.Index(cmd, "RCPT TO:") == 0:
 				
 				if cl.rcpts_count > Config.Smtp.Maxrcpts {
@@ -434,7 +446,7 @@ func Parser(cl *Client) {
 				cl.bufout = bufio.NewWriter(cl.conn)
 				cl.tls_on = true
 			} else {
-				log.Print(fmt.Sprintf("Could not TLS handshake:%v", err))
+				Log(cl.clientID,fmt.Sprintf("Could not TLS handshake:%v", err))
 			}
 			cl.state = 1
 		case 8:
@@ -571,7 +583,7 @@ func readSmtp(client *Client) (input string, err error) {
 
 	input = strings.Trim(input, " \n\r")
 
-	Log(client.clientID,input)
+	//Log(client.clientID,input)
 	
         return input, err
 }
@@ -601,7 +613,7 @@ func greeting(cl *Client) {
                 cl.res = cl.res + "250-STARTTLS\r\n"
         }
 
-	cl.res = cl.res + "250 AUTH PLAIN CRAM-MD5"
+	cl.res = cl.res + "250 AUTH " + strings.Replace(Config.Smtp.Authmethods,":"," ",-1)
 }
 
 func WriteData() {
@@ -627,7 +639,7 @@ func WriteData() {
 		add_head += "   " + time.Now().Format(time.RFC1123Z) + "\r\n"
 		
 		cl.headers["X-EMail"] = Version
-		
+
 		for k,v := range cl.headers {
 			add_head += k + ": " + v + "\r\n"
 		}
