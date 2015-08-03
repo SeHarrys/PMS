@@ -19,7 +19,9 @@ go build
 ### AllowedHost type
 
   1 : normal
+  
   2 : mirror domain
+  
   3 : centralized all emails in user 'all' (all rcpt_to are valid to all@domain)
 
 ## Config
