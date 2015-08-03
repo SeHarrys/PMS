@@ -297,35 +297,7 @@ func Parser(cl *Client) {
 			case strings.Index(cmd, "NOOP") == 0:
 				cl.res = "220 2.0.0 OK"
 			case strings.Index(cmd, "AUTH") == 0:
-				//Auth(cl,auth_method)
-				auth_method := input[5:]
-				switch { 
-				case AuthMethods["CRAM-MD5"] == true, strings.Index(auth_method,"CRAM-MD5") == 0:
-					AuthMD5(cl)
-				case AuthMethods["PLAIN"] == true, strings.Index(auth_method,"PLAIN") == 0:
-					if ! cl.tls_on {
-						cl.res = "502 Auth PLAIN require STARTTLS"
-						break;
-					}
-					if strings.Index(auth_method,"PLAIN ") == 0 {
-						auth_b64 := input[11:]
-						AuthPlain(cl,auth_b64)
-					} else {
-						// Some clients wait for a response...
-						cl.res = "334\r\n"
-						cl.conn.Write([]byte(string(cl.res)))
-						
-						my_buf,err := readSmtp(cl)
-						if err != nil {
-							println("Error reading:", err.Error())
-							return
-						}
-						AuthPlain(cl,string(my_buf))
-					}
-				default:
-					cl.res = "504 5.5.1 Undefinied authentication method"
-					cl.errors++
-				}
+				Auth(cl,input)
 				// Parse Mail From options
 			case strings.Index(cmd, "MAIL FROM:") == 0:
 				if len(cmd) > 10 {

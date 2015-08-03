@@ -14,6 +14,39 @@ import (
 	_"github.com/go-sql-driver/mysql"
 )
 
+func Auth(cl *Client,input string) {
+	auth_method := input[5:]
+	
+	switch {
+	case AuthMethods["CRAM-MD5"] == true, strings.Index(auth_method,"CRAM-MD5") == 0:
+		AuthMD5(cl)
+	case AuthMethods["PLAIN"] == true, strings.Index(auth_method,"PLAIN") == 0:
+		if ! cl.tls_on {
+			cl.res = "502 Auth PLAIN require STARTTLS"
+			break;
+		}
+		if strings.Index(auth_method,"PLAIN ") == 0 {
+			auth_b64 := input[11:]
+			AuthPlain(cl,auth_b64)
+		} else {
+			// Some clients wait for a response...
+			cl.res = "334\r\n"
+			cl.conn.Write([]byte(string(cl.res)))
+
+			my_buf,err := readSmtp(cl)
+			if err != nil {
+				println("Error reading:", err.Error())
+				return
+			}
+			AuthPlain(cl,string(my_buf))
+		}
+	default:
+		cl.res = "504 5.5.1 Undefinied authentication method"
+		cl.errors++
+	}
+	
+}
+
 func AuthFail(cl *Client,msg string) {
 	cl.res = "535 " + msg
 	//cl.kill_time = time.Now().Unix()
@@ -53,9 +86,7 @@ func AuthPlain(cl *Client,auth_b64 string) {
 		              login[0],login[1],arr[2]).Scan(&id,&pw_passwd,&pw_dir,&status)
 
 	switch {
-	case sqlerr == sql.ErrNoRows:
-                AuthFail(cl,"PLAIN Authentication failed")
-	case sqlerr != nil:
+	case sqlerr == sql.ErrNoRows, sqlerr != nil:
                 AuthFail(cl,"PLAIN Authentication failed")
 	default:
 		if Config.C.Debug == true {
@@ -69,7 +100,7 @@ func AuthPlain(cl *Client,auth_b64 string) {
 }
 
 // Auth CRAM-MD5
-// Como generamos la semilla en cada transaccion se usa pw_clear_passwd para tener el passwd
+// Como generamos la semilla en cada transaccion se usa pw_clear_passwd para tener el passwd , mejor usar PLAIN via TLS o DIGEST-MD5
 func AuthMD5(cl *Client) {
 	str := toBase64(fmt.Sprintf("<%x.%x@%s>", cl.hash , time.Now().Unix(), Config.C.Host))
 
@@ -100,10 +131,7 @@ func AuthMD5(cl *Client) {
 	sqlerr := db.QueryRow("SELECT pw_clear_passwd FROM control WHERE pw_name = ? AND pw_domain = ? LIMIT 1", login[0],login[1]).Scan(&pw_clear_passwd)
 
         switch {
-	case sqlerr == sql.ErrNoRows:
-                AuthFail(cl,"CRAM-MD5 Authentication failed")
-		return
-	case sqlerr != nil:
+	case sqlerr == sql.ErrNoRows, sqlerr != nil:
                 AuthFail(cl,"CRAM-MD5 Authentication failed")
 		return
         }
