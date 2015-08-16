@@ -1,13 +1,13 @@
 # PMS - Pachanga Mail Server
 
-  PMS is a simple email server writen in Go and based on go-guerrilla and the great qpsmtpd
+  PMS is a simple email server SMTP writen in Go and based on go-guerrilla and the great qpsmtpd
 
   Accept all emails of hosts valid in "allowedHosts" or is authenticated user to relay mail
 
   The structure of the users is so simple if the directory exists and is a valid domain
   is a welcome user, you can make symbolic links between directories to make a alias email
 
-  For the config file first read PMS_CONFIG environment and next file pms.conf
+  For the config file first read $ENV{PMS_CONFIG} and next file pms.conf
 
 ```shell
 go get github.com/SeHarrys/PMS
@@ -26,11 +26,11 @@ go build
 
 ## Config
    
-## Autoresponder
-   
-   You can set a message in DB
-   
 ## Auth
+
+  PLAIN		: Only with SSL enabled
+  
+  CRAM-MD5	:
 
   Is authenticade user and relay is enabled
 
@@ -42,33 +42,31 @@ go build
 
   For send emails you can specify a relay server for example postfix at 127.0.0.1:12025
 
-## DKIM
-
-  In the relay server
-  
 ## SPAM
 
   It's my breakfast
-  
-## Virus
-
-  TODO ClamAV
-
-## DMARC
-
-  TODO parse XML and report (make db filter)
 
 ## Plugins
 
-  earlytalker : Check that the client doesn't talk before we send the SMTP banner (qpsmtpd)
+  autoresponder	: You can set a message in DB
   
-  spamc       : spamassasin client
+  clamav	: ToDo - https://github.com/dutchcoders/go-clamd
 
-  whitelist   : Domains whitelisted DB
+  DKIM		: In the relay server
+
+  DMARC		: TODO parse XML and report (make db filter)
   
-  greylisting : 
+  spf		: Sender Policy Framework
+  
+  earlytalker	: Check that the client doesn't talk before we send the SMTP banner (qpsmtpd)
+  
+  spamc		: spamassasin client
 
-  filterdb    : 
+  whitelist	: Domains whitelisted DB
+  
+  greylisting	: 
+
+  filterdb	: 
 
 ## Web Interface
 

@@ -7,17 +7,17 @@ import (
 
 type Cfg struct {
 	Daemon struct {
-		Listen string
-		Tls bool
+		Listen  string
+		Tls     bool
 		Timeout int
 	}
 	Smtp struct {
-		Maxsize   int
-		Maxrcpts  int
-		Maxerrors int
-		Banlimit  int
-		Bantime   int
-		Counter   int
+		Maxsize     int
+		Maxrcpts    int
+		Maxerrors   int
+		Banlimit    int
+		Bantime     int
+		Counter     int
 		Authmethods string
 	}
 	Queue struct {
@@ -41,9 +41,9 @@ type Cfg struct {
 		Timer int
 	}
 	C struct {
-		Debug bool
-		Relay string
-		Host string
+		Debug   bool
+		Relay   string
+		Host    string
 		Logfile string
 		Plugins string
 	}
@@ -61,16 +61,16 @@ const (
 	DENY_USER    = 551
 	DENY_SPAM    = 552
 	// Client constant for method to chan
-	CL_QUEUE     = 1
-	CL_RELAY     = 2
+	CL_QUEUE = 1
+	CL_RELAY = 2
 )
 
-func Log(cID int64,msg string) {
+func Log(cID int64, msg string) {
 
 	if Config.C.Logfile != "" {
-		fd, err := os.OpenFile(Config.C.Logfile, os.O_RDWR | os.O_CREATE | os.O_APPEND, 0666)
+		fd, err := os.OpenFile(Config.C.Logfile, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
 		defer fd.Close()
-		
+
 		if err != nil {
 			log.Fatalf("Error log file: %v", err)
 		}
@@ -78,5 +78,5 @@ func Log(cID int64,msg string) {
 		log.SetOutput(fd)
 	}
 
-	log.Printf("%d > %s\n",cID,msg)
+	log.Printf("%d > %s\n", cID, msg)
 }
