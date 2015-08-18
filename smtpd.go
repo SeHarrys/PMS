@@ -43,8 +43,6 @@ func (dmn *Daemon) New() {
 		dmn.TLSconfig.Rand = rand.Reader
 	}
 	
-	fmt.Printf("%q\n",AuthMethods)
-	
 	dmn.Listen()
 	
 }
