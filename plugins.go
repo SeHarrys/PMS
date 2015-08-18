@@ -4,7 +4,7 @@ import (
 	"net"
 	"strings"
 	"time"
-	//"fmt"
+	"fmt"
 	"github.com/saintienn/go-spamc"
 	"regexp"
 	//"github.com/mirtchovski/clamav"
@@ -125,6 +125,22 @@ func filterDb(cl *Client, pms_user string, pms_domain string) (dir_out string) {
 	return
 }
 
-func FCrDNS(cl *Client) {
+// 1 -> PTR ; 2 -> A|AAA ; 
+// iprev:
+func FCrDNS(cl *Client,ip string,domain string) bool {
+        res, err := net.LookupAddr(ip)
 
+	if err != nil {
+		Log(0,fmt.Sprintf("FCrDNS: %s error: %s\n", res, err))
+	}
+
+	domain = domain + "."
+	
+	if res[0] == domain {
+		cl.headers["iprev"] = "pass"
+		return true
+	} else {
+		cl.headers["iprev"] = "fail"
+		return false
+	}
 }

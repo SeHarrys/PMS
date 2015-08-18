@@ -35,6 +35,7 @@ func Auth(cl *Client, input string) {
 		if strings.Index(auth_method, "PLAIN ") == 0 {
 			auth_b64 := input[11:]
 			AuthPlain(cl, auth_b64)
+			/*
 		} else {
 			// Some clients wait for a response...
 			cl.res = "334\r\n"
@@ -46,6 +47,7 @@ func Auth(cl *Client, input string) {
 				return
 			}
 			AuthPlain(cl, string(my_buf))
+*/
 		}
 	default:
 		cl.res = "504 5.5.1 Undefinied authentication method"

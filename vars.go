@@ -5,6 +5,8 @@ import (
 	"os"
 )
 
+var Config Cfg
+
 type Cfg struct {
 	Daemon struct {
 		Listen  string
