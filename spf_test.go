@@ -1,13 +1,13 @@
 package main
 
 import (
-	"fmt"
-	"net"
+	//"fmt"
+	//"net"
 	"testing"
 )
 
 func TestSpfFail(t *testing.T) {
-	SPF := Spf{helo: "test", client_ip: "145.110.30.4", envelope: "tester@tester.com"}
+	SPF := Spf{helo: "test", client_ip: "145.110.30.4", envelope: "tester@gmail.com"}
 	SPF.New()
 
 	if SPF.status != "fail" {
@@ -16,7 +16,7 @@ func TestSpfFail(t *testing.T) {
 }
 
 func TestSpfValid(t *testing.T) {
-	SPF := Spf{helo: "test", client_ip: "176.31.102.50", envelope: "tester@tester.com"}
+	SPF := Spf{helo: "test", client_ip: "66.249.80.1", envelope: "tester@gmail.com"}
 	SPF.New()
 
 	if SPF.status != "pass" {

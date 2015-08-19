@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-func Auth(cl *Client, input string) {
+func (dmn *Daemon) Auth(cl *Client, input string) {
 	
 	if len(input) < 5 {
 		cl.res = "504 5.5.1 Undefinied authentication method"
@@ -25,9 +25,11 @@ func Auth(cl *Client, input string) {
 	auth_method := input[5:]
 
 	switch {
-	case AuthMethods["CRAM-MD5"] == true, strings.Index(auth_method, "CRAM-MD5") == 0:
+	//case dmn.AuthMethods["DIGEST-MD5"] == true, string.Index(auth_method, "DIGEST-MD5") == 0:
+	//	AuthDigestMD5(cl)
+	case dmn.AuthMethods["CRAM-MD5"] == true, strings.Index(auth_method, "CRAM-MD5") == 0:
 		AuthMD5(cl)
-	case AuthMethods["PLAIN"] == true, strings.Index(auth_method, "PLAIN") == 0:
+	case dmn.AuthMethods["PLAIN"] == true, strings.Index(auth_method, "PLAIN") == 0:
 		if !cl.tls_on {
 			cl.res = "502 Auth PLAIN require STARTTLS"
 			break
@@ -35,7 +37,7 @@ func Auth(cl *Client, input string) {
 		if strings.Index(auth_method, "PLAIN ") == 0 {
 			auth_b64 := input[11:]
 			AuthPlain(cl, auth_b64)
-			/*
+/*
 		} else {
 			// Some clients wait for a response...
 			cl.res = "334\r\n"
@@ -164,8 +166,6 @@ func AuthMD5(cl *Client) {
 func AuthDigestMD5(cl *Client, b64 string) {
 
 }
-
-// Auth GSSAPI
 
 func nullTermToStrings(b []byte) (s []string) {
 	for _, x := range bytes.Split(b, []byte{0}) {

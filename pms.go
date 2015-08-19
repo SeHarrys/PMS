@@ -9,19 +9,15 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"database/sql"
-	//"errors"
 	"fmt"
 	"log"
 	"net"
-	"net/smtp"
 	"os"
-	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
+	"io"
 	"code.google.com/p/gcfg"
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -67,10 +63,7 @@ var Plugins = make(map[string]bool)
 var clientID int64
 var sem chan int // currently active clients
 
-var WriteMailChan chan *Client // Channel WriteMail
-var RelayMailChan chan *Client // Channel RelayMail
-
-var Version = "PMS 004"
+var Version = "PMS 005"
 
 func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
@@ -89,23 +82,10 @@ func main() {
 		fmt.Printf("%v", err)
 	}
 
-	// SET Auth Methods
-	if Config.Smtp.Authmethods != "" {
-		authm := strings.Split(Config.Smtp.Authmethods, ":")
-		for auth := range authm {
-			AuthMethods[authm[auth]] = true
-			Log(0, "[OK] Auth method: "+authm[auth])
-		}
-	}
-
-	// SET Plugins
-	if Config.C.Plugins != "" {
-		plgns := strings.Split(Config.C.Plugins, ":")
-		for plg := range plgns {
-			Plugins[plgns[plg]] = true
-			Log(0, "[OK] Plugin: "+plgns[plg])
-		}
-	}
+	pidfile()
+	// camlistored
+	shutdownc := make(chan io.Closer, 1) // receives io.Closer to cleanly shut down
+	go Signals(shutdownc)
 
 	// init MySQL
 	db, err = sql.Open("mysql", Config.Db.User+":"+Config.Db.Pass+Config.Db.Host+"/"+Config.Db.Name)
@@ -130,28 +110,17 @@ func main() {
 	// Channels
 	sem = make(chan int, 20)
 
-	WriteMailChan = make(chan *Client, 20)
-	RelayMailChan = make(chan *Client, 10)
-	
-	for i := 0; i < 20; i++ {
-		go WriteData()
-	}
-
-	for i := 0; i < 10; i++ {
-		go RelayMail()
-	}
-
-
 	// Config && Vars per domain
 	lis := strings.Split(Config.Daemon.Listen,",")
 	for addr := range lis {
-		fmt.Println("Listen: ",lis[addr])
 		
 		Daemon := &Daemon{
-			clientID: 1,
-			timeout: time.Duration(Config.Daemon.Timeout),
-			listen: lis[addr],
-			TLS: true,
+			AuthMethods: make(map[string]bool),
+			Plugins:     make(map[string]bool),
+			clientID:    1,
+			timeout:     time.Duration(Config.Daemon.Timeout),
+			listen:      lis[addr],
+			TLS:         Config.Daemon.Tls,
 		}
 		
 		go Daemon.New()
@@ -182,117 +151,5 @@ func Checks() {
 		// reject / deny / temp / queue / relay / spam / virus
 		
 		ValidsRCPT()
-	}
-}
-
-func WriteData() {
-
-	for {
-		cl := <-WriteMailChan
-
-		var Header bytes.Buffer
-		
-		cl.subject = mimeHeaderDecode(cl.subject)
-		cl.hash = md5hex(cl.mail_from + cl.subject + strconv.FormatInt(time.Now().UnixNano(), 10))
-
-		email, domain := getMail(cl.my_rcpt)
-
-		Header.WriteString("Delivered-To: " + cl.my_rcpt + "\r\n")
-
-		if Config.Queue.Hidereceived == true && cl.auth == true {
-			Header.WriteString("Received: from localhost\r\n")
-		} else {
-			Header.WriteString("Received: from " + cl.helo + " (" + cl.helo + "  [" + cl.addr + "])\r\n")
-		}
-
-		Header.WriteString("   by " + Config.C.Host + " with SMTP id " + cl.hash + "@" + Config.C.Host + ";\r\n")
-		Header.WriteString("   " + time.Now().Format(time.RFC1123Z) + "\r\n")
-
-		cl.headers["X-EMail"] = Version
-
-		for k, v := range cl.headers {
-			Header.WriteString(k + ": " + v + "\r\n")
-		}
-
-		cl.data = Header.String() + cl.mail_con
-
-		real_dir := Config.Queue.Maildir + domain + "/" + email + "/"
-		new_dir, _ := filepath.EvalSymlinks(real_dir)
-
-		parts := strings.Split(new_dir, "/")
-		leng := len(parts)
-
-		pms_user := parts[leng-1]
-		pms_domain := parts[leng-2]
-
-		// Filters EMail
-		var dir_out string = ""
-
-		if Plugins["filterdb"] == true {
-			dir_out = filterDb(cl, pms_user, pms_domain)
-		}
-
-		var my_file string = Config.Queue.Maildir + domain + "/" + email + "/Maildir/" + dir_out + "new/" +
-			strconv.FormatInt(cl.clientID, 9) + "_" + cl.hash + ":2,"
-
-		saveFile(cl, my_file)
-
-		cl.savedNotify <- 1
-	}
-}
-
-func saveFile(cl *Client, my_file string) {
-
-	if Config.C.Debug == true {
-		Log(cl.clientID, my_file)
-	}
-
-	file, err := os.Create(my_file)
-	defer file.Close()
-
-	if err != nil {
-		log.Println(err)
-		cl.savedNotify <- 452
-	}
-
-	w := bufio.NewWriter(file)
-	fmt.Fprint(w, cl.data)
-	w.Flush()
-}
-
-func RelayMail() {
-
-	for {
-		cl := <-RelayMailChan
-
-		c, err := smtp.Dial(Config.C.Relay)
-
-		if err != nil {
-			cl.relayNotify <- -1
-			return
-		}
-
-		c.Mail(cl.mail_from)
-		c.Rcpt(cl.my_rcpt)
-
-		// Send the email body
-		wc, err := c.Data()
-		//defer wc.Close()
-
-		if err != nil {
-			Log(cl.clientID, fmt.Sprintf("%s", err))
-			cl.relayNotify <- 500
-		}
-
-		buf := bytes.NewBufferString(cl.data)
-
-		if _, err = buf.WriteTo(wc); err != nil {
-			log.Println(err)
-			cl.relayNotify <- 500
-		}
-
-		wc.Close()
-
-		cl.relayNotify <- 1
 	}
 }

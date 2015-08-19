@@ -90,7 +90,7 @@ func filterDb(cl *Client, pms_user string, pms_domain string) (dir_out string) {
 		if err := rows.Scan(&method, &method_arg, &value, &out); err != nil {
 			return
 		}
-
+		
 		if method == "from" {
 			switch method_arg {
 			case "email":

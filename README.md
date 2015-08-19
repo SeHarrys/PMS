@@ -2,17 +2,10 @@
 
   PMS is a simple email server SMTP writen in Go and based on go-guerrilla and the great qpsmtpd
 
-  Accept all emails of hosts valid in "allowedHosts" or is authenticated user to relay mail
-
-  The structure of the users is so simple if the directory exists and is a valid domain
-  is a welcome user, you can make symbolic links between directories to make a alias email
-
   For the config file first read $ENV{PMS_CONFIG} and next file pms.conf
 
 ```shell
 go get github.com/SeHarrys/PMS
-export GOPATH=`pwd`
-export PATH=$PATH:$GOPATH/bin
 go build
 ```
 
@@ -20,9 +13,15 @@ go build
 
   1 : normal
   
+	The structure of the users is so simple if the directory exists and is a valid domain
+	
   2 : mirror domain
   
   3 : centralized all emails in user 'all' (all rcpt_to are valid to all@domain)
+
+## Email Alias
+
+   You can make symbolic links between directories to make a alias email
 
 ## Config
    
@@ -40,11 +39,7 @@ go build
   
 ## Relay
 
-  For send emails you can specify a relay server for example postfix at 127.0.0.1:12025
-
-## SPAM
-
-  It's my breakfast
+   To send emails you can specify a relay server for auth users only
 
 ## Plugins
 
@@ -66,7 +61,9 @@ go build
   
   greylisting	: 
 
-  filterdb	: 
+  filterdb	:
+
+  fcrdns	:
 
 ## Web Interface
 

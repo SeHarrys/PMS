@@ -35,7 +35,7 @@ var (
 	reg_ip4       = regexp.MustCompile(`^ip4:(.*)$`)
 	reg_ip6       = regexp.MustCompile(`^ip6:(.*)$`)
 	reg_include   = regexp.MustCompile(`^(?:include|mx):(.*)$`)
-	reg_redirect  = regexp.MustCompile(`^redirect:(.*)$`)
+	reg_redirect  = regexp.MustCompile(`^redirect=(.*)$`)
 	reg_exp       = regexp.MustCompile(`^exp:(.*)$`)
 	reg_mechanism = regexp.MustCompile(`^\-?\~?(a|ptr|exists|all)$`)
 )
@@ -44,8 +44,6 @@ func (SPF *Spf) New() {
 	SPF.status = "fail"
 
 	SPF.Domain()
-
-	//fmt.Println(SPF.status)
 
 	if SPF.status != "temperror" {
 		SPF.Parser(SPF.records[0])
@@ -162,7 +160,7 @@ func (SPF *Spf) Parser(txt string) {
 
 	// First ommited -> reg_version
 	for i := 1; i < len(record); i++ {
-		switch {
+		switch {			
 		case reg_mechanism.MatchString(record[i]):
 			//fmt.Println("Mechanism :",record[i])
 			if record[i] == "mx" {
@@ -184,6 +182,10 @@ func (SPF *Spf) Parser(txt string) {
 			m := reg_include.FindStringSubmatch(record[i])
 			SPF.Get(m[1])
 			SPF.Parser(SPF.records[0])
+		case reg_redirect.MatchString(record[i]):
+			m := reg_redirect.FindStringSubmatch(record[i])
+			SPF.Get(m[1])
+			SPF.Parser(SPF.records[0])			
 		default:
 			//fmt.Printf("No coincidencia: %s\n",record[i])
 			SPF.status = "permerror"
