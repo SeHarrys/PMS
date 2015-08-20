@@ -15,7 +15,6 @@ import (
 	"os"
 	"regexp"
 	"strings"
-	"time"
 )
 
 func getMail(email string) (user string, domain string) {
@@ -196,17 +195,6 @@ func fixCharset(charset string) string {
 		return fixed_charset
 	}
 	return charset
-}
-
-func banHost(host string) {
-	s := strings.Split(host, ":")
-
-	if bannedHosts[s[0]] == Config.Smtp.Banlimit {
-		bannedHosts[s[0]] = int(time.Now().Unix()) + Config.Smtp.Bantime
-	} else {
-		bannedHosts[s[0]] = bannedHosts[s[0]] + 1
-	}
-
 }
 
 func ValidsRCPT() {

@@ -1,12 +1,13 @@
+// Plugins PMS
 package main
 
 import (
-	"net"
-	"strings"
-	"time"
 	"fmt"
 	"github.com/saintienn/go-spamc"
+	"net"
 	"regexp"
+	"strings"
+	"time"
 	//"github.com/mirtchovski/clamav"
 )
 
@@ -65,7 +66,7 @@ func WhiteList(cl *Client) (status bool) {
 			return false
 		}
 
-		if cldom == strings.ToUpper(domain) {
+		if strings.ToUpper(cldom) == strings.ToUpper(domain) {
 			status = true
 			return
 		}
@@ -75,6 +76,36 @@ func WhiteList(cl *Client) (status bool) {
 	return false
 }
 
+func Greylisting(cl *Client) bool {
+	var TimeGrey int
+
+	sqlerr := db.QueryRow("SELECT time FROM greylisting WHERE ip = ?", cl.ip).Scan(&TimeGrey)
+
+	if sqlerr != nil {
+		return false
+	}
+	
+	if TimeGrey == 0 {
+		TimeGrey = int(time.Now().Unix()) + 600
+		_, _ = db.Exec(
+			"INSERT INTO greylisting (ip, time) VALUES ($1, $2)",
+			cl.ip,
+			TimeGrey,
+		)
+		return false
+	}
+	
+	if TimeGrey < int(time.Now().Unix()) {
+		return false
+	}
+
+	return true
+}
+
+// Filter emails
+// from: domain / email
+// subject: 
+// headers: Filter from a header var ( List-Id , X-BeenThere ... )
 func filterDb(cl *Client, pms_user string, pms_domain string) (dir_out string) {
 	dir_out = ""
 
@@ -90,7 +121,7 @@ func filterDb(cl *Client, pms_user string, pms_domain string) (dir_out string) {
 		if err := rows.Scan(&method, &method_arg, &value, &out); err != nil {
 			return
 		}
-		
+
 		if method == "from" {
 			switch method_arg {
 			case "email":
@@ -100,7 +131,7 @@ func filterDb(cl *Client, pms_user string, pms_domain string) (dir_out string) {
 				}
 			case "domain":
 				_, domain := getMail(cl.mail_from)
-				if strings.ToUpper(value) == domain {
+				if strings.ToUpper(value) == strings.ToUpper(domain) {
 					dir_out = out + "/"
 					return
 				}
@@ -125,17 +156,17 @@ func filterDb(cl *Client, pms_user string, pms_domain string) (dir_out string) {
 	return
 }
 
-// 1 -> PTR ; 2 -> A|AAA ; 
+// 1 -> PTR ; 2 -> A|AAA ;
 // iprev:
-func FCrDNS(cl *Client,ip string,domain string) bool {
-        res, err := net.LookupAddr(ip)
+func FCrDNS(cl *Client, ip string, domain string) bool {
+	res, err := net.LookupAddr(ip)
 
 	if err != nil {
-		Log(0,fmt.Sprintf("FCrDNS: %s error: %s\n", res, err))
+		Log(0, fmt.Sprintf("FCrDNS: %s error: %s\n", res, err))
 	}
 
 	domain = domain + "."
-	
+
 	if res[0] == domain {
 		cl.headers["iprev"] = "pass"
 		return true

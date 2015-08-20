@@ -15,20 +15,20 @@ import (
 )
 
 func (dmn *Daemon) Auth(cl *Client, input string) {
-	
+
 	if len(input) < 5 {
 		cl.res = "504 5.5.1 Undefinied authentication method"
 		cl.errors++
 		return
 	}
-	
+
 	auth_method := input[5:]
 
 	switch {
 	//case dmn.AuthMethods["DIGEST-MD5"] == true, string.Index(auth_method, "DIGEST-MD5") == 0:
 	//	AuthDigestMD5(cl)
 	case dmn.AuthMethods["CRAM-MD5"] == true, strings.Index(auth_method, "CRAM-MD5") == 0:
-		AuthMD5(cl)
+		dmn.AuthMD5(cl)
 	case dmn.AuthMethods["PLAIN"] == true, strings.Index(auth_method, "PLAIN") == 0:
 		if !cl.tls_on {
 			cl.res = "502 Auth PLAIN require STARTTLS"
@@ -36,20 +36,20 @@ func (dmn *Daemon) Auth(cl *Client, input string) {
 		}
 		if strings.Index(auth_method, "PLAIN ") == 0 {
 			auth_b64 := input[11:]
-			AuthPlain(cl, auth_b64)
-/*
-		} else {
-			// Some clients wait for a response...
-			cl.res = "334\r\n"
-			cl.conn.Write([]byte(string(cl.res)))
+			dmn.AuthPlain(cl, auth_b64)
+			/*
+				} else {
+					// Some clients wait for a response...
+					cl.res = "334\r\n"
+					cl.conn.Write([]byte(string(cl.res)))
 
-			my_buf, err := readSmtp(cl)
-			if err != nil {
-				println("Error reading:", err.Error())
-				return
-			}
-			AuthPlain(cl, string(my_buf))
-*/
+					my_buf, err := readSmtp(cl)
+					if err != nil {
+						println("Error reading:", err.Error())
+						return
+					}
+					AuthPlain(cl, string(my_buf))
+			*/
 		}
 	default:
 		cl.res = "504 5.5.1 Undefinied authentication method"
@@ -58,18 +58,18 @@ func (dmn *Daemon) Auth(cl *Client, input string) {
 
 }
 
-func AuthFail(cl *Client, msg string) {
+func (dmn *Daemon) AuthFail(cl *Client, msg string) {
 	cl.res = "535 " + msg
 	//cl.kill_time = time.Now().Unix()
-	banHost(cl.addr)
+	dmn.banHost(cl.ip)
 }
 
 // Auth PLAIN only via TLS
-func AuthPlain(cl *Client, auth_b64 string) {
+func (dmn *Daemon) AuthPlain(cl *Client, auth_b64 string) {
 	arr := nullTermToStrings([]byte(fromBase64(auth_b64)))
 
 	if len(arr) < 3 {
-		AuthFail(cl, "PLAIN Authentication failed")
+		dmn.AuthFail(cl, "PLAIN Authentication failed")
 		return
 	}
 
@@ -78,7 +78,7 @@ func AuthPlain(cl *Client, auth_b64 string) {
 
 	// login && passwd no vacios
 	if len(login) != 2 {
-		AuthFail(cl, "PLAIN Authentication failed")
+		dmn.AuthFail(cl, "PLAIN Authentication failed")
 		return
 	}
 
@@ -98,7 +98,7 @@ func AuthPlain(cl *Client, auth_b64 string) {
 
 	switch {
 	case sqlerr == sql.ErrNoRows, sqlerr != nil:
-		AuthFail(cl, "PLAIN Authentication failed")
+		dmn.AuthFail(cl, "PLAIN Authentication failed")
 	default:
 		if Config.C.Debug == true {
 			log.Printf("PMS: %s %s %d\n", pw_passwd, pw_dir, status)
@@ -112,7 +112,7 @@ func AuthPlain(cl *Client, auth_b64 string) {
 
 // Auth CRAM-MD5
 // Como generamos la semilla en cada transaccion se usa pw_clear_passwd para tener el passwd , mejor usar PLAIN via TLS o DIGEST-MD5
-func AuthMD5(cl *Client) {
+func (dmn *Daemon) AuthMD5(cl *Client) {
 	str := toBase64(fmt.Sprintf("<%x.%x@%s>", cl.hash, time.Now().Unix(), Config.C.Host))
 
 	cl.res = "334 " + str + "\r\n"
@@ -133,7 +133,7 @@ func AuthMD5(cl *Client) {
 	login := strings.Split(arr[0], "@")
 
 	if len(login) != 2 {
-		AuthFail(cl, "CRAM-MD5 Authentication failed")
+		dmn.AuthFail(cl, "CRAM-MD5 Authentication failed")
 		return
 	}
 
@@ -143,7 +143,7 @@ func AuthMD5(cl *Client) {
 
 	switch {
 	case sqlerr == sql.ErrNoRows, sqlerr != nil:
-		AuthFail(cl, "CRAM-MD5 Authentication failed")
+		dmn.AuthFail(cl, "CRAM-MD5 Authentication failed")
 		return
 	}
 
@@ -158,7 +158,7 @@ func AuthMD5(cl *Client) {
 		cl.auth = true
 		cl.state = 1
 	} else {
-		AuthFail(cl, "CRAM-MD5 Authentication failed for:"+arr[0])
+		dmn.AuthFail(cl, "CRAM-MD5 Authentication failed for:"+arr[0])
 	}
 }
 

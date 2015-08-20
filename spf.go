@@ -160,7 +160,7 @@ func (SPF *Spf) Parser(txt string) {
 
 	// First ommited -> reg_version
 	for i := 1; i < len(record); i++ {
-		switch {			
+		switch {
 		case reg_mechanism.MatchString(record[i]):
 			//fmt.Println("Mechanism :",record[i])
 			if record[i] == "mx" {
@@ -185,7 +185,7 @@ func (SPF *Spf) Parser(txt string) {
 		case reg_redirect.MatchString(record[i]):
 			m := reg_redirect.FindStringSubmatch(record[i])
 			SPF.Get(m[1])
-			SPF.Parser(SPF.records[0])			
+			SPF.Parser(SPF.records[0])
 		default:
 			//fmt.Printf("No coincidencia: %s\n",record[i])
 			SPF.status = "permerror"

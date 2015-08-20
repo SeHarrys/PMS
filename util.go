@@ -2,12 +2,12 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"os/signal"
 	"io"
 	"log"
-	"time"
+	"os"
+	"os/signal"
 	"syscall"
+	"time"
 )
 
 func Log(cID int64, msg string) {
@@ -41,10 +41,10 @@ func pidfile() {
 //camilstored riped
 func Signals(shutdownc <-chan io.Closer) {
 	c := make(chan os.Signal, 1)
-	
+
 	signal.Notify(c, syscall.SIGHUP)
 	signal.Notify(c, syscall.SIGINT)
-	
+
 	for {
 		sig := <-c
 		sysSig, ok := sig.(syscall.Signal)
@@ -53,10 +53,10 @@ func Signals(shutdownc <-chan io.Closer) {
 		}
 		switch sysSig {
 		case syscall.SIGHUP:
-			Log(0,"SIGHUP: Restarting")
+			Log(0, "SIGHUP: Restarting")
 			syscall.Exec("/proc/self/exe", os.Args, os.Environ())
 		case syscall.SIGINT:
-			Log(0,"SIGINT: Shutting down")
+			Log(0, "SIGINT: Shutting down")
 			os.Remove("pms.pid")
 			donec := make(chan bool)
 			go func() {
@@ -76,7 +76,7 @@ func Signals(shutdownc <-chan io.Closer) {
 				os.Exit(1)
 			}
 		default:
-			Log(0,"Received another signal, should not happen.")
+			Log(0, "Received another signal, should not happen.")
 		}
 	}
 }

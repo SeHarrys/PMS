@@ -8,57 +8,21 @@
 package main
 
 import (
-	"bufio"
+	"code.google.com/p/gcfg"
 	"database/sql"
 	"fmt"
+	_ "github.com/go-sql-driver/mysql"
+	"io"
 	"log"
-	"net"
 	"os"
 	"runtime"
 	"strings"
-	"time"
-	"io"
-	"code.google.com/p/gcfg"
-	_ "github.com/go-sql-driver/mysql"
+	"time"	
 )
-
-type Client struct {
-	IP          []byte // IPv4 4bytes - IPv6 16bytes
-	host        string
-	auth        bool
-	state       int
-	status      int
-	helo        string
-	mail_to     string
-	mail_from   string
-	mail_con    string // Mail content
-	rcpt_to     string
-	rcpts       map[string]string
-	my_rcpt     string // Actual RCPT
-	rcpts_count int    // Stupid but rcpts duplicates...
-	res         string
-	addr        string
-	data        string
-	subject     string
-	hash        string
-	headers     map[string]string // Email headers
-	time        int64
-	conn        net.Conn
-	bufin       *bufio.Reader
-	bufout      *bufio.Writer
-	kill_time   int64
-	errors      int
-	clientID    int64
-	savedNotify chan int
-	relayNotify chan int
-	tls_on      bool
-}
 
 var db *sql.DB // Global mysql DB
 var allowedHosts = make(map[string]int)
-var bannedHosts = make(map[string]int)
-var AuthMethods = make(map[string]bool)
-var Plugins = make(map[string]bool)
+//var bannedHosts = make(map[string]int)
 
 var clientID int64
 var sem chan int // currently active clients
@@ -67,7 +31,7 @@ var Version = "PMS 005"
 
 func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
-	
+
 	log.Printf("%s - Go %s (%s/%s) - CPUs %d", Version, runtime.Version(), runtime.GOOS, runtime.GOARCH, runtime.NumCPU())
 
 	var cfgFile = "pms.conf"
@@ -111,21 +75,22 @@ func main() {
 	sem = make(chan int, 20)
 
 	// Config && Vars per domain
-	lis := strings.Split(Config.Daemon.Listen,",")
+	lis := strings.Split(Config.Daemon.Listen, ",")
 	for addr := range lis {
-		
+
 		Daemon := &Daemon{
 			AuthMethods: make(map[string]bool),
 			Plugins:     make(map[string]bool),
+			bannedHosts: make(map[string]int),
 			clientID:    1,
 			timeout:     time.Duration(Config.Daemon.Timeout),
 			listen:      lis[addr],
 			TLS:         Config.Daemon.Tls,
 		}
-		
+
 		go Daemon.New()
 	}
-	
+
 	Checks()
 }
 
@@ -135,13 +100,14 @@ func Checks() {
 
 		fmt.Printf("Sesiones Abiertas: %d\n", clientID)
 
+		/*
 		for k, v := range bannedHosts {
 			if v > Config.Smtp.Banlimit && int(time.Now().Unix()) > v {
 				fmt.Printf("Limpiamos: %s - %d\n", k, v)
 				delete(bannedHosts, k)
 			}
 		}
-
+*/
 		err := db.Ping()
 		if err != nil {
 			log.Fatalf("Error on Ping connection: %s", err.Error())
@@ -149,7 +115,7 @@ func Checks() {
 
 		// Generar stats: Monitorix
 		// reject / deny / temp / queue / relay / spam / virus
-		
+
 		ValidsRCPT()
 	}
 }
